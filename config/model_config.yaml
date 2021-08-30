@@ -1,0 +1,9 @@
+model: bert-base-uncased
+max_len: 64
+dropout_rate: 0.1
+
+batch_size: 32
+epochs: 10
+learning_rate: 5e-5
+
+ckpt_path: None
