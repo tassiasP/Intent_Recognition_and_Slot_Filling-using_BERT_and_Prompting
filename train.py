@@ -30,7 +30,8 @@ def train(model: JointBert, train_dataloader: DataLoader, training_params, inten
         running_loss = 0.0
 
         train_iter = tqdm(train_dataloader)
-        for i, batch in enumerate(train_iter):
+        # for i, batch in enumerate(train_iter):
+        for i, batch in enumerate(train_dataloader):
             optimizer.zero_grad()
 
             batch = tuple(feature.to(device) for feature in batch)
@@ -48,7 +49,7 @@ def train(model: JointBert, train_dataloader: DataLoader, training_params, inten
 
             intent_loss = intent_criterion(
                 intent_out.view(-1, len(intent_labels_vocab)),
-                intent_labels.view(-1),
+                intent_labels.view(-1)
             )
 
             loss = slot_loss + intent_loss
@@ -58,7 +59,7 @@ def train(model: JointBert, train_dataloader: DataLoader, training_params, inten
             optimizer.step()
             scheduler.step()
 
-            if (i % 50 == 0 or i == len(train_dataloader)-1) and i != 0:
-                print(f"Epoch: {epoch}, Training Steps: {i+1} / {len(train_iter)}, Loss: {running_loss / i}")
+            if (i % 50 == 0 or i == len(train_dataloader) - 1) and i != 0:
+                print(f"Epoch: {epoch + 1}, Training Steps: {i + 1} / {len(train_iter)}, Loss: {running_loss / i}")
 
-            progress_bar.update(32)
+            progress_bar.update(1)

@@ -12,8 +12,7 @@ def main(run_args, model_config):
     set_seed(run_args.seed)
 
     reader = Reader(run_args.dataset)
-    reader.read_dataset()
-    reader.construct_intent_and_slot_label_mapping()
+    reader.construct_intent_and_slot_label_mapping(write_to_disk=True)
 
     intent_labels, slot_labels = reader.get_intent_labels(), reader.get_slot_labels()
 
@@ -53,13 +52,5 @@ if __name__ == '__main__':
 
     run_args = parser.parse_args()
     model_config = OmegaConf.load("config/model_config.yaml")
-
-    # processor = JointProcessor()
-    # # toy test example
-    # processed = processor.convert_example_to_bert_features("This is the transformative library",
-    #                                                        12,
-    #                                                        [0, 0, 0, 2, 5])
-    #
-    # print(processed)
 
     main(run_args, model_config)

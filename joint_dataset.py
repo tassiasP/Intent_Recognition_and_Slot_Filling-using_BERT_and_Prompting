@@ -28,7 +28,6 @@ class JointProcessor:
 
     def __init__(self, model_name: str, max_len=64):
         super().__init__()
-        # TODO Obtain model_config
         self.tokenizer = BertTokenizerFast.from_pretrained(model_name)
         self.max_len = max_len
 
