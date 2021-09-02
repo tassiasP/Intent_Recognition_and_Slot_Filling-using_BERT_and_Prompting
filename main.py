@@ -33,7 +33,7 @@ def main(run_args, model_config):
                                               mode='train',
                                               batch_size=model_config.batch_size,
                                               model_name=model_config.model)
-            train(model, train_dataloader, model_config, intent_labels, slot_labels)
+            train(model, train_dataloader, val_dataloader, model_config, intent_labels, slot_labels)
 
 
 if __name__ == '__main__':

@@ -21,7 +21,7 @@ def slot_metrics(labels, preds):
 
 def intent_metrics(labels, preds):
     accuracy = (labels == preds).mean()
-    f1 = sklearn_f1_score(y_true=labels, y_pred=preds)
+    f1 = sklearn_f1_score(y_true=labels, y_pred=preds, average='weighted')
 
     return accuracy, f1
 
