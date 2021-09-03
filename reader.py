@@ -23,7 +23,7 @@ class Reader:
 
         return sentences, slots, intents
 
-    def construct_intent_and_slot_label_mapping(self, write_to_disk=True):
+    def construct_intent_and_slot_vocabs(self, write_to_disk=True):
         _, slots, intents = self.read_dataset(mode='train')
 
         sorted_intent_labels = sorted(list(set(intents)))

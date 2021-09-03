@@ -44,10 +44,11 @@ def train(
             batch = tuple(feature.to(device) for feature in batch)
             input_ids, token_type_ids, attention_mask, slot_labels, intent_labels = batch
 
-            intent_out, slot_out = model(input_ids=input_ids,
-                                         attention_mask=attention_mask,
-                                         token_type_ids=token_type_ids
-                                         )
+            intent_out, slot_out = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids
+            )
 
             active_loss = attention_mask.view(-1) == 1
             active_logits = slot_out.view(-1, len(slot_labels_vocab))[active_loss]
@@ -115,11 +116,9 @@ def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_voc
 
         # Slot prediction
         batch_slot_preds = torch.argmax(slot_out, dim=2).detach().cpu()
-        # slot_preds = np.concatenate(slot_preds, batch_slot_preds)
         slot_preds.append(batch_slot_preds)
 
         batch_slot_labels = batch_slot_labels.detach().cpu()
-        # slot_labels_true = np.concatenate(slot_labels_true, batch_slot_labels)
         slot_labels_true.append(batch_slot_labels)
 
     phase_str = "Validation" if phase=='dev' else "Test"

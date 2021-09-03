@@ -12,19 +12,14 @@ def main(run_args, model_config):
     set_seed(run_args.seed)
 
     reader = Reader(run_args.dataset)
-    reader.construct_intent_and_slot_label_mapping(write_to_disk=True)
+    reader.construct_intent_and_slot_vocabs(write_to_disk=True)
 
     intent_labels, slot_labels = reader.get_intent_labels(), reader.get_slot_labels()
 
     if run_args.model_type == 'bert':
         model = JointBert(model_config, len(intent_labels), len(slot_labels))
 
-        test_dataloader = get_dataloader(run_args.dataset,
-                                         mode='test',
-                                         batch_size=model_config.batch_size,
-                                         model_name=model_config.model)
-
-        if run_args.do_train:
+        if run_args.do_train and run_args.do_eval:
             train_dataloader = get_dataloader(run_args.dataset,
                                               mode='train',
                                               batch_size=model_config.batch_size,
@@ -33,7 +28,11 @@ def main(run_args, model_config):
                                             mode='dev',
                                             batch_size=model_config.batch_size,
                                             model_name=model_config.model)
-            train(model, train_dataloader, val_dataloader, None, model_config, intent_labels, slot_labels)
+            test_dataloader = get_dataloader(run_args.dataset,
+                                             mode='test',
+                                             batch_size=model_config.batch_size,
+                                             model_name=model_config.model)
+            train(model, train_dataloader, val_dataloader, test_dataloader, model_config, intent_labels, slot_labels)
 
 
 if __name__ == '__main__':
