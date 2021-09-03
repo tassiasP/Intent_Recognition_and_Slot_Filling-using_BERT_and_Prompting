@@ -9,7 +9,16 @@ from transformers import AdamW, get_linear_schedule_with_warmup
 from utils import intent_metrics, slot_metrics
 
 
-def train(model, train_dataloader: DataLoader, val_dataloader, training_params, intent_labels_vocab, slot_labels_vocab):
+def train(
+        model,
+        train_dataloader: DataLoader,
+        val_dataloader: DataLoader,
+        test_dataloader: DataLoader,
+        training_params,
+        intent_labels_vocab,
+        slot_labels_vocab,
+        ):
+
     n_epochs = training_params.epochs
     learning_rate = training_params.learning_rate
 
@@ -63,28 +72,32 @@ def train(model, train_dataloader: DataLoader, val_dataloader, training_params, 
 
             progress_bar.update(1)
 
-        evaluate(model, val_dataloader, intent_labels_vocab, slot_labels_vocab)
+        evaluate(model, val_dataloader, intent_labels_vocab, slot_labels_vocab, phase='dev')
+
+    if test_dataloader is not None:
+        evaluate(model, test_dataloader, intent_labels_vocab, slot_labels_vocab, phase='test')
 
 
-def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_vocab):
+def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_vocab, phase='dev'):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
     running_loss = 0.0
     intent_criterion, slot_criterion = nn.CrossEntropyLoss(), nn.CrossEntropyLoss()
 
-    slot_preds = list()  # np.array([])
-    slot_labels_true = list()  # np.array([])
+    slot_preds = []
+    slot_labels_true = []
 
     for batch in dataloader:
         with torch.no_grad():
             batch = tuple(feature.to(device) for feature in batch)
             input_ids, token_type_ids, attention_mask, batch_slot_labels, batch_intent_labels = batch
 
-            intent_out, slot_out = model(input_ids=input_ids,
-                                         attention_mask=attention_mask,
-                                         token_type_ids=token_type_ids
-                                         )
+            intent_out, slot_out = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids
+            )
 
             # Loss calculation
             active_loss = attention_mask.view(-1) == 1
@@ -109,28 +122,28 @@ def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_voc
         # slot_labels_true = np.concatenate(slot_labels_true, batch_slot_labels)
         slot_labels_true.append(batch_slot_labels)
 
-
-    print(f" Validation Loss: {running_loss / len(dataloader) :.3f}")
-
-    # slot_labels_preds = [[slot_labels_vocab[slot_pred_idx] for slot_pred_idx in utter]
-    #                      for batch in slot_preds
-    #                      for utter in batch
-    #                      if slot_criterion.ignore_index]
-    # slot_labels_true = [[slot_labels_vocab[slot_true_idx] for slot_true_idx in utter] for batch in slot_labels_true for utter in batch]
+    phase_str = "Validation" if phase=='dev' else "Test"
+    print(f" {phase_str} Loss: {running_loss / len(dataloader) :.3f}")
 
     slot_labels_preds = []
     slot_labels_gold = []
-    for batch_true, batch_pred in zip(slot_labels_true, slot_labels_preds):
+    for batch_true, batch_pred in zip(slot_labels_true, slot_preds):
         for utter_true, utter_pred in zip(batch_true, batch_pred):
-            for slot_true_idx, slot_pred_idx in zip(utter_true, utter_pred):
-                if slot_true_idx != slot_criterion.ignore_index:
-                    slot_labels_preds.append(slot_labels_vocab[slot_pred_idx])
-                    slot_labels_gold.append(slot_labels_vocab[slot_true_idx])
+            slot_labels_preds.append(
+                [slot_labels_vocab[slot_pred_idx]
+                 for slot_true_idx, slot_pred_idx in zip(utter_true, utter_pred)
+                 if slot_true_idx != slot_criterion.ignore_index]
+            )
+            slot_labels_gold.append(
+                [slot_labels_vocab[slot_true_idx] for slot_true_idx in utter_true
+                 if slot_true_idx != slot_criterion.ignore_index]
+            )
 
     slot_f1 = slot_metrics(slot_labels_gold, slot_labels_preds)
 
     intent_preds = torch.argmax(intent_out, dim=1).detach().cpu().numpy()
     intent_labels_true = batch_intent_labels.detach().cpu().numpy()
     intent_accuracy, intent_f1 = intent_metrics(intent_labels_true, intent_preds)
-    print(f" Validation Intent Accuracy: {intent_accuracy}, Validation Intent F1: {intent_f1: .2f},"
-          f" Validation Slot F1: {slot_f1}\n")
+
+    print(f" {phase_str} Intent Accuracy: {intent_accuracy: .3f}, {phase_str} Intent F1: {intent_f1: .3f},"
+          f" {phase_str} Slot F1: {slot_f1: .3f}\n")

@@ -19,10 +19,6 @@ def main(run_args, model_config):
     if run_args.model_type == 'bert':
         model = JointBert(model_config, len(intent_labels), len(slot_labels))
 
-        val_dataloader = get_dataloader(run_args.dataset,
-                                        mode='dev',
-                                        batch_size=model_config.batch_size,
-                                        model_name=model_config.model)
         test_dataloader = get_dataloader(run_args.dataset,
                                          mode='test',
                                          batch_size=model_config.batch_size,
@@ -33,7 +29,11 @@ def main(run_args, model_config):
                                               mode='train',
                                               batch_size=model_config.batch_size,
                                               model_name=model_config.model)
-            train(model, train_dataloader, val_dataloader, model_config, intent_labels, slot_labels)
+            val_dataloader = get_dataloader(run_args.dataset,
+                                            mode='dev',
+                                            batch_size=model_config.batch_size,
+                                            model_name=model_config.model)
+            train(model, train_dataloader, val_dataloader, None, model_config, intent_labels, slot_labels)
 
 
 if __name__ == '__main__':
