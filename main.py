@@ -32,7 +32,19 @@ def main(run_args, model_config):
                                              mode='test',
                                              batch_size=model_config.batch_size,
                                              model_name=model_config.model)
-            train(model, train_dataloader, val_dataloader, test_dataloader, model_config, intent_labels, slot_labels)
+            if run_args.save_preds:
+                intent_preds, slot_preds = train(model,
+                                                 train_dataloader,
+                                                 val_dataloader,
+                                                 test_dataloader,
+                                                 model_config,
+                                                 intent_labels,
+                                                 slot_labels
+                                                 )
+                reader.save_test_preds_to_csv(intent_preds, slot_preds)
+
+            else:
+                train(model, train_dataloader, val_dataloader, test_dataloader, model_config, intent_labels, slot_labels)
 
 
 if __name__ == '__main__':
@@ -42,12 +54,14 @@ if __name__ == '__main__':
                                                                           "and fine-tune")
     # parser.add_argument("--model_dir", default=None, required=True, type=str, help="Path to save, load model")
     # parser.add_argument("--data_dir", default="./data", type=str, help="The input data directory")
-    parser.add_argument("--dataset", default="snips", type=str, help="The input dataset")
+    parser.add_argument("--dataset", default="atis", type=str, help="The input dataset")
     parser.add_argument("--model_type", default="bert", type=str, help="Select model type")
     parser.add_argument('--seed', type=int, default=42, help="Seed for reproducibility")
 
     parser.add_argument('--do_train', default=True, type=bool, help="Whether to train the model.")
     parser.add_argument("--do_eval", default=True, type=bool, help="Whether to evaluate the model on the test set.")
+
+    parser.add_argument("--save_preds", default=True, type=bool, help="Whether to save model's predictions to csv.")
 
     run_args = parser.parse_args()
     model_config = OmegaConf.load("config/model_config.yaml")

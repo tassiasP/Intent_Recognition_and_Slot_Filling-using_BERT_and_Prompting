@@ -20,7 +20,6 @@ class InputExample:
     intent_label: str
 
     def to_dict(self):
-        """Serializes this instance to a Python dictionary."""
         return copy.deepcopy(self.__dict__)
 
 

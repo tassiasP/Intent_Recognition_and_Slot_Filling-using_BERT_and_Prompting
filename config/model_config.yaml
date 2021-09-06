@@ -3,7 +3,7 @@ max_len: 64
 dropout_rate: 0.1
 
 batch_size: 32
-epochs: 10
+epochs: 8
 learning_rate: 5e-5
 
 checkpoint_path: None
