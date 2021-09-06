@@ -33,7 +33,9 @@ def train(
     optimizer = AdamW(model.parameters(), lr=learning_rate)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
 
-    progress_bar = trange(num_training_steps)
+    progress_bar = trange(num_training_steps, desc="Total Batches")
+
+    best_val_loss = np.float("inf")
     for epoch in range(n_epochs):
         model.train()
         running_loss = 0.0
@@ -68,15 +70,18 @@ def train(
             scheduler.step()
 
             if (i % int(len(train_dataloader) / 4) == 0 or i == len(train_dataloader) - 1) and i != 0:
-                print(f" Epoch: {epoch + 1}, Training Batch: {i + 1} / {len(train_dataloader)},"
+                print(f" Epoch: {epoch + 1} / {n_epochs}, Training Batch: {i + 1} / {len(train_dataloader)},"
                       f" Loss: {running_loss / i: .3f}")
 
             progress_bar.update(1)
 
-        evaluate(model, val_dataloader, intent_labels_vocab, slot_labels_vocab, phase='dev')
+        val_loss = evaluate(model, val_dataloader, intent_labels_vocab, slot_labels_vocab, phase='dev')
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            # TODO save best model
 
     if test_dataloader is not None:
-        evaluate(model, test_dataloader, intent_labels_vocab, slot_labels_vocab, phase='test')
+        return evaluate(model, test_dataloader, intent_labels_vocab, slot_labels_vocab, phase='test')
 
 
 def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_vocab, phase='dev'):
@@ -88,6 +93,8 @@ def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_voc
 
     slot_preds = []
     slot_labels_true = []
+    intent_preds = []
+    intent_labels_true = []
 
     for batch in dataloader:
         with torch.no_grad():
@@ -121,9 +128,19 @@ def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_voc
         batch_slot_labels = batch_slot_labels.detach().cpu()
         slot_labels_true.append(batch_slot_labels)
 
-    phase_str = "Validation" if phase=='dev' else "Test"
-    print(f" {phase_str} Loss: {running_loss / len(dataloader) :.3f}")
+        # Intent prediction
+        batch_intent_preds = torch.argmax(intent_out, dim=1).detach().cpu().tolist()
+        intent_preds.append(batch_intent_preds)
 
+        batch_intent_labels = batch_intent_labels.detach().cpu().tolist()
+        intent_labels_true.append(batch_intent_labels)
+
+    val_loss = running_loss / len(dataloader)
+    phase_str = "Validation" if phase == 'dev' else "Test"
+    print(f" {phase_str} Loss: {val_loss :.3f}")
+
+    # Convert slot_ids (both actual and predictions) to the actual BIO tags in order to feed them to the `seqeval`
+    # metrics. Also, ignore tags that belong to the padding token (pad_token_id = -100)
     slot_labels_preds = []
     slot_labels_gold = []
     for batch_true, batch_pred in zip(slot_labels_true, slot_preds):
@@ -140,9 +157,15 @@ def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_voc
 
     slot_f1 = slot_metrics(slot_labels_gold, slot_labels_preds)
 
-    intent_preds = torch.argmax(intent_out, dim=1).detach().cpu().numpy()
-    intent_labels_true = batch_intent_labels.detach().cpu().numpy()
+    intent_preds = [intent_pred for batch in intent_preds for intent_pred in batch]
+    intent_labels_true = [intent_true for batch in intent_labels_true for intent_true in batch]
     intent_accuracy, intent_f1 = intent_metrics(intent_labels_true, intent_preds)
 
     print(f" {phase_str} Intent Accuracy: {intent_accuracy: .3f}, {phase_str} Intent F1: {intent_f1: .3f},"
           f" {phase_str} Slot F1: {slot_f1: .3f}\n")
+
+    if phase == 'test':
+        intent_labels_preds = [intent_labels_vocab[intent_pred] for intent_pred in intent_preds]
+        return intent_labels_preds, slot_labels_preds
+    else:
+        return val_loss
