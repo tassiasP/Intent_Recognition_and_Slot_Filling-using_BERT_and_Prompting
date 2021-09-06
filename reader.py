@@ -1,4 +1,7 @@
 import os
+from typing import List
+
+import pandas as pd
 
 
 class Reader:
@@ -32,7 +35,8 @@ class Reader:
         sorted_slot_labels = sorted(list(slot_labels),
                                     key=lambda slot_name: (slot_name[2:], slot_name[:2]))
 
-        # TODO why unk?
+        # Add "unknown" token in case of missing intents and slots in the training set
+        # and "padding" slot to ignore slot predictions referring to the padding token with id = -100
         sorted_intent_labels = ["UNK"] + sorted_intent_labels
         sorted_slot_labels = ["UNK", "PAD"] + sorted_slot_labels
 
@@ -51,3 +55,16 @@ class Reader:
 
     def get_slot_labels(self):
         return Reader._read_file(os.path.join(self.data_path, self.dataset, "slot_labels.txt"), split=False)
+
+    def save_test_preds_to_csv(self, slot_preds: List[List[str]], intent_preds: List[str]):
+        sentences, slots, intents = self.read_dataset(mode='test')
+        df = pd.DataFrame(list(zip(sentences, slots, intents, slot_preds, intent_preds)),
+                          columns=['utterance', 'slots', 'intent', 'intent_pred', 'slots_preds'])
+
+        df.to_csv(f"{self.dataset}_test_preds.csv")
+
+    def construct_df_from_dataset(self, mode='train'):
+        sentences, slots, intents = self.read_dataset(mode='train')
+
+        return pd.DataFrame(list(zip(sentences, slots, intents)),
+                            columns=['utterance', 'slots', 'intent'])
