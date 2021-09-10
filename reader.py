@@ -64,7 +64,7 @@ class Reader:
         df.to_csv(f"{self.dataset}_test_preds.csv")
 
     def construct_df_from_dataset(self, mode='train'):
-        sentences, slots, intents = self.read_dataset(mode='train')
+        sentences, slots, intents = self.read_dataset(mode=mode)
 
         return pd.DataFrame(list(zip(sentences, slots, intents)),
                             columns=['utterance', 'slots', 'intent'])
