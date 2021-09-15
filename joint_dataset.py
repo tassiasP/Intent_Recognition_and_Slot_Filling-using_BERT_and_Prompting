@@ -6,10 +6,11 @@ import torch
 from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
 import torch.nn as nn
 
-from transformers import BertTokenizerFast, BatchEncoding
+from transformers import BertTokenizerFast, BatchEncoding, BartTokenizer
 from transformers.hf_argparser import HfArgumentParser
 
 from reader import Reader
+from utils import INTENT_MAPPING
 
 
 @dataclass(frozen=True)
@@ -121,3 +122,56 @@ def get_dataloader(dataset: str, mode: str, batch_size: int, model_name: str) ->
     dataloader = DataLoader(dataset=dataset, batch_size=batch_size, sampler=sampler, num_workers=8)
 
     return dataloader
+
+
+class IntentDataset(Dataset):
+
+    def __init__(self, dataset: str, mode: str, tokenizer, max_len=64):
+        super().__init__()
+        self.dataset = dataset
+        self.mode = mode
+        self.max_len = max_len
+
+        self.tokenizer = tokenizer
+
+        reader = Reader(self.dataset)
+        self.sentences, _, self.intents = reader.read_dataset(mode=self.mode)
+
+    def __len__(self):
+        return len(self.intents)
+
+    def __getitem__(self, index):
+        utter = self.sentences[index]
+        intent = self.intents[index]
+
+        prompt = '. This sentence refers to <mask>'
+        utter.extend(prompt.split())
+        input_utter = utter
+        output_utter = INTENT_MAPPING[intent]  # utter + '.' + prompt + INTENT_MAPPING[intent]
+
+        model_inputs = self.tokenizer(
+            input_utter,
+            padding="max_length",
+            max_length=self.max_len,
+            truncation=True,
+            is_split_into_words=True,
+            return_tensors='pt'
+        )
+        with self.tokenizer.as_target_tokenizer():
+            labels = self.tokenizer(
+                output_utter,
+                padding="max_length",
+                max_length=5,
+                truncation=True,
+                is_split_into_words=False,
+                return_tensors='pt'
+            )
+
+        labels = labels["input_ids"]
+        labels[labels == self.tokenizer.pad_token_id] = nn.CrossEntropyLoss().ignore_index
+
+        model_inputs["labels"] = labels
+        model_inputs = {k: feature.flatten() for k, feature in model_inputs.items()}
+
+        return model_inputs
+
