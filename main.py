@@ -105,7 +105,7 @@ if __name__ == '__main__':
     # parser.add_argument("--model_dir", default=None, required=True, type=str, help="Path to save, load model")
     # parser.add_argument("--data_dir", default="./data", type=str, help="The input data directory")
     parser.add_argument("--dataset", default="snips", type=str, help="The input dataset")
-    parser.add_argument("--model_type", default="bart", type=str, help="Select model type")
+    parser.add_argument("--model_type", default="bert", type=str, help="Select model type")
     parser.add_argument('--seed', type=int, default=42, help="Seed for reproducibility")
 
     parser.add_argument('--do_train', default=True, type=bool, help="Whether to train the model.")
