@@ -187,7 +187,7 @@ class IntentDataset(Dataset):
 
 class SlotDataset(IntentDataset):
 
-    def __init__(self, dataset: str, mode: str, tokenizer, max_len=64):
+    def __init__(self, dataset: str, mode: str, tokenizer, max_len=128):
         super().__init__(dataset, mode, tokenizer, max_len)
         self.intent_slots_mapping = self.get_intent_slots_mapping()
 
@@ -233,18 +233,16 @@ class SlotDataset(IntentDataset):
     @staticmethod
     def get_template(relevant_slots: set[str], slots_dict_without_bio: dict):
         example_slots = {slot for slot in slots_dict_without_bio}
-        print(f'{example_slots=}')
-
+        # print(f'{example_slots=}')
         assert example_slots.issubset(relevant_slots)
 
-        input_template = ""
-        output_template = ""
+        input_template = ". "
+        output_template = ". "
         for slot in relevant_slots:
+            input_template += f"The {SLOT_MAPPING[slot]} is <mask> . "
             if slot in example_slots:
-                input_template += f"The {SLOT_MAPPING[slot]} is <mask>. "
                 output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}. "
             else:
-                input_template += f"The {SLOT_MAPPING[slot]} is <mask>. "
                 output_template += f"The {SLOT_MAPPING[slot]} is none. "
 
         return input_template, output_template
@@ -257,7 +255,38 @@ class SlotDataset(IntentDataset):
         relevant_slots = self.intent_slots_mapping[intent]
         slots_dict_without_bio = self.get_clean_slots_dict(utter, slots)
 
-
+        input_template, output_template = self.get_template(relevant_slots, slots_dict_without_bio)
 
         input_utter = copy.deepcopy(utter)
         output_utter = copy.deepcopy(utter)
+
+        input_utter.extend(input_template.split())
+        output_utter.extend(output_template.split())
+
+        # print(f"{utter=}\t{input_utter=}\t{output_utter=}")
+
+        model_inputs = self.tokenizer(
+            input_utter,
+            padding="max_length",
+            max_length=self.max_len,
+            truncation=True,
+            is_split_into_words=True,
+            return_tensors='pt'
+        )
+        with self.tokenizer.as_target_tokenizer():
+            labels = self.tokenizer(
+                output_utter,
+                padding="max_length",
+                max_length=self.max_len,
+                truncation=True,
+                is_split_into_words=True,
+                return_tensors='pt'
+            )
+
+        labels = labels["input_ids"]
+        labels[labels == self.tokenizer.pad_token_id] = nn.CrossEntropyLoss().ignore_index
+
+        model_inputs["labels"] = labels
+        model_inputs = {k: feature.flatten() for k, feature in model_inputs.items()}
+
+        return model_inputs
