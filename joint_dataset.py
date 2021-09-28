@@ -189,9 +189,9 @@ class SlotDataset(IntentDataset):
 
     def __init__(self, dataset: str, mode: str, tokenizer, max_len=128):
         super().__init__(dataset, mode, tokenizer, max_len)
-        self.intent_slots_mapping = self.get_intent_slots_mapping()
+        self.intent_slots_mapping = self._get_intent_slots_mapping()
 
-    def get_intent_slots_mapping(self):
+    def _get_intent_slots_mapping(self):
         intent_slots_mapping = defaultdict(set)
         _, slots, intents = self.reader.read_dataset(mode='train')
         assert len(slots) == len(intents)
@@ -206,44 +206,78 @@ class SlotDataset(IntentDataset):
     @staticmethod
     def get_clean_slots_dict(utter: List[str], tags: List[str]):
         # example:
-        # utter = ["listen", "to", "westbam", "alumb", "allergic", "on", "google", "music"]
-        # tags = ["O", "O", "B-artist", "O", "B-album", "O", "B-service", "I-service"]
-        # returns: dict({"artist": "westbam", "album": "allergic", "service": "google music"})
+        #   utter = ["listen", "to", "westbam", "alumb", "allergic", "on", "google", "music"]
+        #   tags = ["O", "O", "B-artist", "O", "B-album", "O", "B-service", "I-service"]
+        #   returns: dict({"artist": "westbam", "album": "allergic", "service": "google music"})
 
         slots = {}
         span = None
         slot_key = None
+        previous_is_begin = False
 
         for word, tag in zip(utter, tags):
             if tag.startswith('B-'):
+                if previous_is_begin:
+                    slots[slot_key] = span
                 slot_key = tag[2:]
                 span = word
+                previous_is_begin = True
             elif tag.startswith('I-'):
                 span += ' ' + word
+                previous_is_begin = False
             else:  # it is an 'O'
                 if slot_key is not None:
                     slots[slot_key] = span
                     slot_key = None
+                previous_is_begin = False
         else:
             if slot_key is not None:
                 slots[slot_key] = span
 
         return slots
 
-    @staticmethod
-    def get_template(relevant_slots: set[str], slots_dict_without_bio: dict):
+    def get_template(self, relevant_slots: set[str], slots_dict_without_bio: dict):
         example_slots = {slot for slot in slots_dict_without_bio}
         # print(f'{example_slots=}')
         assert example_slots.issubset(relevant_slots)
 
-        input_template = ". "
-        output_template = ". "
+        eos_token = self.tokenizer.eos_token
+        sep_token = self.tokenizer.sep_token
+        separator = ". "  # also tried out sep_token
+
+        input_template = f"{separator}"
+        output_template = f"{separator}"
         for slot in relevant_slots:
-            input_template += f"The {SLOT_MAPPING[slot]} is <mask> . "
-            if slot in example_slots:
-                output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}. "
-            else:
-                output_template += f"The {SLOT_MAPPING[slot]} is none. "
+            if slot != list(relevant_slots)[-1]:
+                input_template += f"The {SLOT_MAPPING[slot]} is <mask>{separator}"
+                if slot in example_slots:
+                    output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}{separator}"
+                else:
+                    output_template += f"The {SLOT_MAPPING[slot]} is none{separator}"
+            else:  # if at last iteration don't add separator token at the end
+                input_template += f"The {SLOT_MAPPING[slot]} is <mask>"
+                if slot in example_slots:
+                    output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}"
+                else:
+                    output_template += f"The {SLOT_MAPPING[slot]} is none"
+######################################################################################################################
+        # input_template = f"{eos_token}"
+        # output_template = ""
+        # for slot in relevant_slots:
+        #     if slot != list(relevant_slots)[-1]:  # if at last iteration don't add separator token at the end
+        #         input_template += f"The {SLOT_MAPPING[slot]} is <mask>{sep_token}"
+        #         if slot in example_slots:
+        #             output_template += f"{slots_dict_without_bio[slot]}{sep_token}"
+        #         else:
+        #             output_template += f"none{sep_token}"
+        #     else:
+        #         input_template += f"The {SLOT_MAPPING[slot]} is <mask>"
+        #         if slot in example_slots:
+        #             output_template += f"{slots_dict_without_bio[slot]}"
+        #         else:
+        #             output_template += f"none"
+######################################################################################################################
+
 
         return input_template, output_template
 
@@ -262,6 +296,7 @@ class SlotDataset(IntentDataset):
 
         input_utter.extend(input_template.split())
         output_utter.extend(output_template.split())
+        # output_utter = output_template.split()
 
         # print(f"{utter=}\t{input_utter=}\t{output_utter=}")
 
