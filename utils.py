@@ -58,7 +58,7 @@ def convert_output_to_slot_preds(prediction_output):
         match = re.search(r"(?<=The).*", sent)
         if match:
             match = match.group(0).strip()
-            print(match)
+            # print(match)
             if match != '':
                 slot, _, value = match.partition(' is ')
                 slot, value = slot.strip(), value.strip()
@@ -69,6 +69,23 @@ def convert_output_to_slot_preds(prediction_output):
                     continue
 
     return slot_preds
+
+
+def compute_micro_f1(scores: dict):
+    tps = 0  # true positives
+    fps = 0  # false positives
+    fns = 0  # false negatives
+    for slot_scores in scores.values():
+        tps += slot_scores["true_positives"]
+        fps += slot_scores["false_positives"]
+        fns += slot_scores["false_negatives"]
+
+    print(f"{tps=}\t{fps=}\t{fns=}")
+    micro_precision = tps / (tps + fps)
+    micro_recall = tps / (tps + fns)
+    micro_f1 = 2 * micro_precision * micro_recall / (micro_precision + micro_recall)
+
+    return micro_precision, micro_recall, micro_f1
 
 
 # To be used for BART mask filling
