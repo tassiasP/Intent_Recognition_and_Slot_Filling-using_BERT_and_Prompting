@@ -80,7 +80,7 @@ def compute_micro_f1(scores: dict):
         fps += slot_scores["false_positives"]
         fns += slot_scores["false_negatives"]
 
-    print(f"{tps=}\t{fps=}\t{fns=}")
+    print(f"# of True Positives= {tps}\t# of False Positives= {fps}\t# of False Negatives= {fns}")
     micro_precision = tps / (tps + fps)
     micro_recall = tps / (tps + fns)
     micro_f1 = 2 * micro_precision * micro_recall / (micro_precision + micro_recall)
