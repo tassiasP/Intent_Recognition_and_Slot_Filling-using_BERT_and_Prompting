@@ -211,27 +211,24 @@ class SlotDataset(IntentDataset):
         #   returns: dict({"artist": "westbam", "album": "allergic", "service": "google music"})
 
         slots = {}
-        span = None
-        slot_key = None
-        previous_is_begin = False
+        prev_bio_tag = 'O'
 
         for word, tag in zip(utter, tags):
             if tag.startswith('B-'):
-                if previous_is_begin:
+                if prev_bio_tag == 'B' or prev_bio_tag == 'I':
                     slots[slot_key] = span
                 slot_key = tag[2:]
                 span = word
-                previous_is_begin = True
+                prev_bio_tag = 'B'
             elif tag.startswith('I-'):
                 span += ' ' + word
-                previous_is_begin = False
+                prev_bio_tag = 'I'
             else:  # it is an 'O'
-                if slot_key is not None:
+                if prev_bio_tag != 'O':
                     slots[slot_key] = span
-                    slot_key = None
-                previous_is_begin = False
+                prev_bio_tag = 'O'
         else:
-            if slot_key is not None:
+            if prev_bio_tag != 'O':
                 slots[slot_key] = span
 
         return slots
@@ -243,7 +240,7 @@ class SlotDataset(IntentDataset):
 
         eos_token = self.tokenizer.eos_token
         sep_token = self.tokenizer.sep_token
-        separator = ". "  # also tried out sep_token
+        separator = sep_token  # also tried out full stop
 
         input_template = f"{separator}"
         output_template = f"{separator}"
@@ -277,7 +274,6 @@ class SlotDataset(IntentDataset):
         #         else:
         #             output_template += f"none"
 ######################################################################################################################
-
 
         return input_template, output_template
 
