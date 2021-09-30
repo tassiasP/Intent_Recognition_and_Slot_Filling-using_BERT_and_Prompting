@@ -56,7 +56,7 @@ def main(run_args, model_config):
     elif run_args.approach.lower() == 'prompt' and run_args.model_type.lower() == 'bart':
         checkpoint = 'facebook/bart-base'
         tokenizer = BartTokenizer.from_pretrained(checkpoint)
-        checkpoint = './test-bart/checkpoint-2000'
+        # checkpoint = './test-bart/checkpoint-2000'
         model = BartForConditionalGeneration.from_pretrained(checkpoint, forced_bos_token_id=tokenizer.bos_token_id)
 
         # train_dataset = IntentDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer)
@@ -74,7 +74,7 @@ def main(run_args, model_config):
 
         # Use Huggingface's Trainer class for training and evaluation
         training_args = TrainingArguments(
-            output_dir="test-bart-without-mask",
+            output_dir="test-bart-remove-target-tok",
             # evaluation_strategy="epoch",
             dataloader_num_workers=4,
             per_device_train_batch_size=16,
@@ -92,14 +92,14 @@ def main(run_args, model_config):
             # compute_metrics=intent_metrics_bart
         )
 
-        # trainer.train()
+        trainer.train()
         # trainer.evaluate()
 
         # predict_results = trainer.predict(test_dataset)
-        # Select a subset of the test dataset for evaluation because the whole set does not fit into GPU memory
-        begin_prediction_range = 500
+        begin_prediction_range = 0
         num_predictions = 100
 
+        # Select a subset of the test dataset for evaluation because the whole set does not fit into GPU memory
         to_predict = [test_dataset[i] for i in range(begin_prediction_range, begin_prediction_range + num_predictions)]
         predict_results = trainer.predict(to_predict)
 
@@ -136,16 +136,18 @@ def main(run_args, model_config):
                 if slot_pred != 'none':
                     if gold_slot == '':
                         scores[slot_name]["false_positives"] += 1
-                        print(f"Test example {i+1}\t{slot_name=}\t{slot_pred=}")
+                        # print(f"Test example {i+1}\t{slot_name=}\t{slot_pred=}")
                     else:
                         if gold_slot == slot_pred:
+                            # print(f"TPTest example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                             scores[slot_name]["true_positives"] += 1
                         else:
+                            # print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                             # Maybe skip the following?
                             scores[slot_name]["false_negatives"] += 1
                 else:
                     if gold_slot != '':
-                        print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                        # print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                         scores[slot_name]["false_negatives"] += 1
 
         prec, rec, f1 = compute_micro_f1(scores=scores)
