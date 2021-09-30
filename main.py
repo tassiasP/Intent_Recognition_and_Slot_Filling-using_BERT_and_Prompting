@@ -74,7 +74,7 @@ def main(run_args, model_config):
 
         # Use Huggingface's Trainer class for training and evaluation
         training_args = TrainingArguments(
-            output_dir="test-bart-remove-target-tok",
+            output_dir="test-bart",
             # evaluation_strategy="epoch",
             dataloader_num_workers=4,
             per_device_train_batch_size=16,
