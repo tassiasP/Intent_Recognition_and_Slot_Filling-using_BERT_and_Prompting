@@ -1,13 +1,15 @@
 import argparse
 
 import torch.cuda
+from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
 from omegaconf import OmegaConf
-from transformers import TrainingArguments, Trainer, BartForConditionalGeneration, BartTokenizer
+from transformers import TrainingArguments, Trainer, BartForConditionalGeneration, BartTokenizer, BartConfig, \
+    Seq2SeqTrainingArguments, Seq2SeqTrainer, T5Config, T5Tokenizer, T5ForConditionalGeneration
 
 from joint_dataset import get_dataloader, IntentDataset, SlotDataset
 from models import JointBert
-from train import train
+from train import train, train_seq2seq_model
 from utils import set_seed, intent_metrics_bart, INTENT_MAPPING, convert_output_to_slot_preds, SLOT_MAPPING,\
     compute_micro_f1
 from reader import Reader
@@ -22,7 +24,7 @@ def main(run_args, model_config):
 
     intent_labels, slot_labels = reader.get_intent_labels(), reader.get_slot_labels()
 
-    if run_args.approach.lower() == 'fine-tune' and run_args.model_type.lower() == 'bert':
+    if run_args.approach.lower() == 'fine-tuning' and run_args.model_type.lower() == 'bert':
         model = JointBert(model_config, len(intent_labels), len(slot_labels))
 
         if run_args.do_train and run_args.do_eval:
@@ -53,58 +55,67 @@ def main(run_args, model_config):
                 train(model, train_dataloader, val_dataloader, test_dataloader, model_config, intent_labels,
                       slot_labels)
 
-    elif run_args.approach.lower() == 'prompt' and run_args.model_type.lower() == 'bart':
-        checkpoint = 'facebook/bart-base'
-        tokenizer = BartTokenizer.from_pretrained(checkpoint)
-        # checkpoint = './test-bart/checkpoint-2000'
-        model = BartForConditionalGeneration.from_pretrained(checkpoint, forced_bos_token_id=tokenizer.bos_token_id)
+    elif run_args.approach.lower() == 'prompting':
+        if run_args.model_type.lower() == 'bart':
+            checkpoint = 'facebook/bart-base'
 
-        # train_dataset = IntentDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer)
-        # val_dataset = IntentDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer)
-        # test_dataset = IntentDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer)
+            config = BartConfig.from_pretrained(checkpoint)
+            config.force_bos_token_to_be_generated = True
+            # config.forced_bos_token_id = tokenizer.bos_token_id
+
+            tokenizer = BartTokenizer.from_pretrained(checkpoint)
+
+            # checkpoint = './test-bart/checkpoint-3000'
+            model = BartForConditionalGeneration.from_pretrained(checkpoint, config=config)  #, forced_bos_token_id=tokenizer.bos_token_id)
+        elif run_args.model_type.lower() == 't5':
+            checkpoint = 't5-small'
+
+            # config = T5Config.from_pretrained(checkpoint)
+            tokenizer = T5Tokenizer.from_pretrained(checkpoint)
+            # checkpoint = './test-t5/checkpoint-3000'
+            model = T5ForConditionalGeneration.from_pretrained(checkpoint)
 
         train_dataset = SlotDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer)
         val_dataset = SlotDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer)
         test_dataset = SlotDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer)
 
-        #############
-        # Try out a subset of the training set (few-shot)
-        # indices = torch.randperm(len(train_dataset))[:1000]
-        # train_dataset = Subset(train_dataset, indices=indices)
-
         # Use Huggingface's Trainer class for training and evaluation
-        training_args = TrainingArguments(
-            output_dir="test-bart",
+        training_args = Seq2SeqTrainingArguments(
+            output_dir="test-t5",
             # evaluation_strategy="epoch",
             dataloader_num_workers=4,
-            per_device_train_batch_size=16,
-            per_device_eval_batch_size=1,
+            per_device_train_batch_size=8,
+            per_device_eval_batch_size=4,
             num_train_epochs=2,
             load_best_model_at_end=False,
+            predict_with_generate=True
             # eval_accumulation_steps=4
         )
 
-        trainer = Trainer(
+        trainer = Seq2SeqTrainer(
             model,
             training_args,
             train_dataset=train_dataset,
             # eval_dataset=val_dataset,
-            # compute_metrics=intent_metrics_bart
+            # compute_metrics=intent_metrics_bart,
+            tokenizer=tokenizer
         )
 
         trainer.train()
         # trainer.evaluate()
 
+        # predict_results = model.generate(test_dataset[0]['input_ids'].unsqueeze(0), decoder_start_token_id=tokenizer.eos_token_id)
         # predict_results = trainer.predict(test_dataset)
-        begin_prediction_range = 0
-        num_predictions = 100
 
         # Select a subset of the test dataset for evaluation because the whole set does not fit into GPU memory
+        begin_prediction_range = 0
+        num_predictions = 80
+
         to_predict = [test_dataset[i] for i in range(begin_prediction_range, begin_prediction_range + num_predictions)]
-        predict_results = trainer.predict(to_predict)
+        predict_results = trainer.predict(to_predict, max_length=128)
 
         predictions = tokenizer.batch_decode(
-            predict_results.predictions[0].argmax(axis=-1),
+            predict_results.predictions,
             skip_special_tokens=False
         )
 
@@ -117,7 +128,6 @@ def main(run_args, model_config):
                 "false_negatives": 0
             }
 
-        acc_per_utter = []
         for i in range(begin_prediction_range, begin_prediction_range + num_predictions):
             utter = test_dataset.sentences[i]
             tags = test_dataset.slots[i]
@@ -142,7 +152,7 @@ def main(run_args, model_config):
                             # print(f"TPTest example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                             scores[slot_name]["true_positives"] += 1
                         else:
-                            # print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                            print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                             # Maybe skip the following?
                             scores[slot_name]["false_negatives"] += 1
                 else:
@@ -166,15 +176,35 @@ def main(run_args, model_config):
         #     if pred.split()[-1] != label:
         #         print(f"True label: {init_label: >15} \tMapped label: {label: >15}\tPrediction: {pred}")
 
+    elif run_args.approach.lower() == 'manual_prompting' and run_args.model_type.lower() == 'test-bart':
+        checkpoint = 't5-small'
+        #
+        # config = BartConfig.from_pretrained(checkpoint)
+        # config.force_bos_token_to_be_generated = True
+
+        tokenizer = T5Tokenizer.from_pretrained(checkpoint)
+        model = T5ForConditionalGeneration.from_pretrained(checkpoint)
+
+        train_dataset = SlotDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer)
+        val_dataset = SlotDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer)
+        test_dataset = SlotDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer)
+        train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=8)
+        # val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=8)
+        test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=8)
+
+        train_seq2seq_model(model, tokenizer, train_dataloader, None, test_dataloader=test_dataloader)
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--approach", default="prompt", type=str, help="Select approach between prompt and fine-tune")
+    parser.add_argument("--approach", default="prompting", type=str,
+                        help="Select approach between `prompting` and `fine-tuning`")
     # parser.add_argument("--model_dir", default=None, required=True, type=str, help="Path to save, load model")
     # parser.add_argument("--data_dir", default="./data", type=str, help="The input data directory")
     parser.add_argument("--dataset", default="snips", type=str, help="The input dataset")
-    parser.add_argument("--model_type", default="bart", type=str, help="Select model type")
+    parser.add_argument("--model_type", default="t5", type=str, help="Select model type")
     parser.add_argument('--seed', type=int, default=42, help="Seed for reproducibility")
 
     parser.add_argument('--do_train', default=True, type=bool, help="Whether to train the model.")

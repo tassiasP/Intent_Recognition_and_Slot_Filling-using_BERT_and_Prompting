@@ -8,7 +8,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
 import torch.nn as nn
 
-from transformers import BertTokenizerFast, BatchEncoding, BartTokenizer
+from transformers import BertTokenizerFast, BatchEncoding, BartTokenizer, T5Tokenizer
+from transformers.models.bart.modeling_bart import shift_tokens_right
 from transformers.hf_argparser import HfArgumentParser
 
 from reader import Reader
@@ -116,9 +117,9 @@ class JointDataset(Dataset):
         return self.processor.convert_example_to_bert_features(example.utterance, intent_id, slot_ids)
 
 
-def get_dataloader(dataset: str, mode: str, batch_size: int, model_name: str) -> DataLoader:
+def get_dataloader(dataset_name: str, mode: str, batch_size: int, model_name: str) -> DataLoader:
     processor = JointProcessor(model_name)
-    dataset = JointDataset(dataset=dataset, mode=mode, processor=processor)
+    dataset = JointDataset(dataset=dataset_name, mode=mode, processor=processor)
 
     sampler = RandomSampler(data_source=dataset) if mode == 'train' else SequentialSampler(data_source=dataset)
     dataloader = DataLoader(dataset=dataset, batch_size=batch_size, sampler=sampler, num_workers=8)
@@ -240,40 +241,41 @@ class SlotDataset(IntentDataset):
 
         eos_token = self.tokenizer.eos_token
         sep_token = self.tokenizer.sep_token
-        separator = sep_token  # also tried out full stop
+        separator = '.'  # sep_token
 
-        input_template = f"{separator}"
-        output_template = f"{separator}"
-        for slot in relevant_slots:
-            if slot != list(relevant_slots)[-1]:
-                input_template += f"The {SLOT_MAPPING[slot]} is <mask>{separator}"
-                if slot in example_slots:
-                    output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}{separator}"
-                else:
-                    output_template += f"The {SLOT_MAPPING[slot]} is none{separator}"
-            else:  # if at last iteration don't add separator token at the end
-                input_template += f"The {SLOT_MAPPING[slot]} is <mask>"
-                if slot in example_slots:
-                    output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}"
-                else:
-                    output_template += f"The {SLOT_MAPPING[slot]} is none"
-######################################################################################################################
-        # input_template = f"{eos_token}"
-        # output_template = ""
-        # for slot in relevant_slots:
-        #     if slot != list(relevant_slots)[-1]:  # if at last iteration don't add separator token at the end
-        #         input_template += f"The {SLOT_MAPPING[slot]} is <mask>{sep_token}"
-        #         if slot in example_slots:
-        #             output_template += f"{slots_dict_without_bio[slot]}{sep_token}"
-        #         else:
-        #             output_template += f"none{sep_token}"
-        #     else:
-        #         input_template += f"The {SLOT_MAPPING[slot]} is <mask>"
-        #         if slot in example_slots:
-        #             output_template += f"{slots_dict_without_bio[slot]}"
-        #         else:
-        #             output_template += f"none"
-######################################################################################################################
+        if isinstance(self.tokenizer, BartTokenizer):
+            input_template = f"{separator}"
+            output_template = f"{separator}"
+            for slot in relevant_slots:
+                if slot != list(relevant_slots)[-1]:
+                    input_template += f"The {SLOT_MAPPING[slot]} is <mask>{separator}"
+                    if slot in example_slots:
+                        output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}{separator}"
+                    else:
+                        output_template += f"The {SLOT_MAPPING[slot]} is none{separator}"
+                else:  # if at last iteration don't add separator token at the end
+                    input_template += f"The {SLOT_MAPPING[slot]} is <mask>"
+                    if slot in example_slots:
+                        output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}"
+                    else:
+                        output_template += f"The {SLOT_MAPPING[slot]} is none"
+        elif isinstance(self.tokenizer, T5Tokenizer):
+            input_template = '. '
+            output_template = ''
+
+            for slot_num, slot in enumerate(relevant_slots):
+                if slot_num != (len(relevant_slots) - 1):
+                    input_template += f"The {SLOT_MAPPING[slot]} is <extra_id_{slot_num}>{separator}"
+                    if slot in example_slots:
+                        output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} "
+                    else:
+                        output_template += f"<extra_id_{slot_num}> none "
+                else:  # if at last iteration also add <extra_id> token at the end
+                    input_template += f"The {SLOT_MAPPING[slot]} is <extra_id_{slot_num}>"
+                    if slot in example_slots:
+                        output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} <extra_id_{slot_num + 1}>"
+                    else:
+                        output_template += f"<extra_id_{slot_num}> none <extra_id_{slot_num + 1}>"
 
         return input_template, output_template
 
@@ -288,11 +290,13 @@ class SlotDataset(IntentDataset):
         input_template, output_template = self.get_template(relevant_slots, slots_dict_without_bio)
 
         input_utter = copy.deepcopy(utter)
-        output_utter = copy.deepcopy(utter)
-
         input_utter.extend(input_template.split())
-        output_utter.extend(output_template.split())
-        # output_utter = output_template.split()
+
+        if isinstance(self.tokenizer, BartTokenizer):
+            output_utter = copy.deepcopy(utter)
+            output_utter.extend(output_template.split())
+        elif isinstance(self.tokenizer, T5Tokenizer):
+            output_utter = output_template.split()
 
         # print(f"{utter=}\t{input_utter=}\t{output_utter=}")
 
@@ -304,6 +308,7 @@ class SlotDataset(IntentDataset):
             is_split_into_words=True,
             return_tensors='pt'
         )
+
         with self.tokenizer.as_target_tokenizer():
             labels = self.tokenizer(
                 output_utter,
@@ -315,9 +320,18 @@ class SlotDataset(IntentDataset):
             )
 
         labels = labels["input_ids"]
-        labels[labels == self.tokenizer.pad_token_id] = nn.CrossEntropyLoss().ignore_index
 
+        # decoder_input_ids = shift_tokens_right(input_ids=model_inputs['input_ids'], pad_token_id=self.tokenizer.pad_token_id,
+        #                                        decoder_start_token_id=self.tokenizer.eos_token_id)
+        # decoder_input_ids = shift_tokens_right(input_ids=labels, pad_token_id=self.tokenizer.pad_token_id,
+        #                                        decoder_start_token_id=self.tokenizer.eos_token_id)
+        # model_inputs["decoder_input_ids"] = decoder_input_ids
+
+        labels[labels == self.tokenizer.pad_token_id] = nn.CrossEntropyLoss().ignore_index
         model_inputs["labels"] = labels
+
         model_inputs = {k: feature.flatten() for k, feature in model_inputs.items()}
 
         return model_inputs
+
+
