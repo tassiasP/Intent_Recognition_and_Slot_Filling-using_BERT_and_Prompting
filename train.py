@@ -16,8 +16,7 @@ def train(
         training_params,
         intent_labels_vocab,
         slot_labels_vocab,
-        ):
-
+):
     n_epochs = training_params.epochs
     learning_rate = training_params.learning_rate
 
@@ -35,8 +34,8 @@ def train(
     progress_bar = trange(num_training_steps, desc="Total Batches")
 
     best_val_loss = np.float("inf")
+    model.train()
     for epoch in range(n_epochs):
-        model.train()
         running_loss = 0.0
 
         for i, batch in enumerate(train_dataloader):
@@ -168,3 +167,98 @@ def evaluate(model, dataloader: DataLoader, intent_labels_vocab, slot_labels_voc
         return intent_labels_preds, slot_labels_preds
     else:
         return val_loss
+
+
+def train_seq2seq_model(
+        model,
+        tokenizer,
+        train_dataloader: DataLoader,
+        val_dataloader: DataLoader,
+        test_dataloader: DataLoader
+):
+    n_epochs = 2
+    learning_rate = 1e-4
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+
+    num_training_steps = n_epochs * len(train_dataloader)
+
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
+
+    progress_bar = trange(num_training_steps, desc="Total Batches")
+
+    best_val_loss = np.float("inf")
+    model.train()
+    for epoch in range(n_epochs):
+        running_loss = 0.0
+
+        for i, batch in enumerate(train_dataloader):
+            optimizer.zero_grad()
+            batch = {k: v.to(device) for k, v in batch.items()}
+
+            input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            loss = outputs.loss
+            loss.backward()
+            running_loss += loss.item()
+
+            optimizer.step()
+            scheduler.step()
+
+            if (i % int(len(train_dataloader) / 4) == 0 or i == len(train_dataloader) - 1) and i != 0:
+                print(f" Epoch: {epoch + 1} / {n_epochs}, Training Batch: {i + 1} / {len(train_dataloader)},"
+                      f" Loss: {running_loss / i: .3f}, Learning Rate: {scheduler.get_last_lr()}")
+
+                ########## debugging ###########
+                logits = outputs.logits
+                predictions = torch.argmax(logits, dim=-1)
+
+            progress_bar.update(1)
+
+        # val_loss = evaluate_seq2seq(model, val_dataloader, phase='dev')
+        # if val_loss < best_val_loss:
+        #     best_val_loss = val_loss
+
+    if test_dataloader is not None:
+        evaluate_seq2seq_model(model, tokenizer, test_dataloader, phase='test')
+
+
+def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    model.eval()
+    running_loss = 0.0
+
+    preds = []
+    labels_gold = []
+
+    for batch in dataloader:
+        with torch.no_grad():
+            batch = {k: v.to(device) for k, v in batch.items()}
+            input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
+
+            gen_kwargs = {"max_length": 64, "early_stopping": False}#, "num_beams": 5, }
+            generated_tokens = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
+                                              # decoder_start_token_id=tokenizer.eos_token_id, **gen_kwargs)
+            if isinstance(generated_tokens, tuple):
+                generated_tokens = generated_tokens[0]
+
+            # Replace -100 in the labels as we can't decode them.
+            # labels = np.where(labels != -100, labels, model.config.pad_token_id)
+            labels[labels == nn.CrossEntropyLoss().ignore_index] = model.config.pad_token_id
+
+
+            # F1 calculation
+            for pred, label in zip(generated_tokens, labels):
+                pred = tokenizer.batch_decode(pred, skip_special_tokens=False)
+                label = tokenizer.batch_decode(label, skip_special_tokens=False)
+
+                preds.append(pred)
+                labels_gold.append(label)
+
+
+
+            # running_loss += loss.item()
