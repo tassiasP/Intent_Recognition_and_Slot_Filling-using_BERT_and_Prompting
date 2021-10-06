@@ -2,10 +2,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from tqdm import trange
+from tqdm import tqdm, trange
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from utils import intent_metrics, slot_metrics
+from utils import intent_metrics, slot_metrics, convert_t5_output_to_slot_preds, compute_micro_f1, SLOT_MAPPING
 
 
 def train(
@@ -176,7 +176,7 @@ def train_seq2seq_model(
         val_dataloader: DataLoader,
         test_dataloader: DataLoader
 ):
-    n_epochs = 2
+    n_epochs = 3
     learning_rate = 1e-4
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -232,33 +232,73 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
     model.eval()
     running_loss = 0.0
 
-    preds = []
-    labels_gold = []
+    preds_lst = []
+    labels_lst = []
 
-    for batch in dataloader:
+    for batch in tqdm(dataloader):
         with torch.no_grad():
             batch = {k: v.to(device) for k, v in batch.items()}
             input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
 
-            gen_kwargs = {"max_length": 64, "early_stopping": False}#, "num_beams": 5, }
+            gen_kwargs = {"max_length": 64, "early_stopping": False}  # , "num_beams": 5, }
             generated_tokens = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
-                                              # decoder_start_token_id=tokenizer.eos_token_id, **gen_kwargs)
-            if isinstance(generated_tokens, tuple):
-                generated_tokens = generated_tokens[0]
+                                              # decoder_start_token_id=tokenizer.eos_token_id)
 
             # Replace -100 in the labels as we can't decode them.
             # labels = np.where(labels != -100, labels, model.config.pad_token_id)
             labels[labels == nn.CrossEntropyLoss().ignore_index] = model.config.pad_token_id
 
-
             # F1 calculation
-            for pred, label in zip(generated_tokens, labels):
-                pred = tokenizer.batch_decode(pred, skip_special_tokens=False)
-                label = tokenizer.batch_decode(label, skip_special_tokens=False)
 
-                preds.append(pred)
-                labels_gold.append(label)
+            preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=False)
+            labels = tokenizer.batch_decode(labels, skip_special_tokens=False)
+
+            preds_lst.extend(preds)
+            labels_lst.extend(labels)
+
+    for pred, label in zip(preds_lst, labels_lst):
+        print(f"{pred=} \n{label=}\n\n")
+    print('#####################')
+
+    cleaned_preds = [convert_t5_output_to_slot_preds(pred) for pred in preds_lst]
+    cleaned_labels = [convert_t5_output_to_slot_preds(label) for label in labels_lst]
+
+    scores = {}
+    for slot in SLOT_MAPPING:
+        scores[slot] = {
+            "true_positives": 0,
+            "false_positives": 0,
+            "false_negatives": 0
+        }
+    acc = 0.0
+    counter = 0
+    for i, (test_example_preds, test_example_labels) in enumerate(zip(cleaned_preds, cleaned_labels)):
+        dataset = dataloader.dataset
+        utter = dataset.sentences[i]
+        tags = dataset.slots[i]
+        intent = dataset.intents[i]
+        intent_slot_mapping = dataset.intent_slots_mapping[intent]
+
+        for slot_name, slot_pred, gold_slot in zip(intent_slot_mapping, test_example_preds, test_example_labels):
+            slot_pred, gold_slot = slot_pred.strip(), gold_slot.strip()
+            if slot_pred != 'none':
+                if gold_slot == 'none':
+                    print(f"Test example {i+1}\t{slot_name=}\t{slot_pred=}")
+                    scores[slot_name]["false_positives"] += 1
+                else:
+                    if gold_slot == slot_pred:
+                        print(f"TPTest example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                        scores[slot_name]["true_positives"] += 1
+                    else:
+                        print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                        # Maybe skip the following?
+                        scores[slot_name]["false_negatives"] += 1
+            else:
+                if gold_slot != 'none':
+                    # print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                    scores[slot_name]["false_negatives"] += 1
+    # print(f"Accuracy= {acc / counter: .3f}\t{acc=}{counter=}")
+    prec, rec, f1 = compute_micro_f1(scores=scores)
+    print(f"Micro F1 score = {f1: .3f}\nMicro Precision score = {prec: .3f}\nMicro Recall score = {rec: .3f}")
 
 
-
-            # running_loss += loss.item()
