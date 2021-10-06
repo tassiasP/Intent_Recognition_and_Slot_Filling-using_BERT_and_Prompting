@@ -10,7 +10,7 @@ from transformers import TrainingArguments, Trainer, BartForConditionalGeneratio
 from joint_dataset import get_dataloader, IntentDataset, SlotDataset
 from models import JointBert
 from train import train, train_seq2seq_model
-from utils import set_seed, intent_metrics_bart, INTENT_MAPPING, convert_output_to_slot_preds, SLOT_MAPPING,\
+from utils import set_seed, intent_metrics_bart, INTENT_MAPPING, convert_bart_output_to_slot_preds, SLOT_MAPPING,\
     compute_micro_f1
 from reader import Reader
 
@@ -133,7 +133,7 @@ def main(run_args, model_config):
             tags = test_dataset.slots[i]
 
             gold_slots = SlotDataset.get_clean_slots_dict(utter, tags)
-            pred_slots = convert_output_to_slot_preds(predictions[i-begin_prediction_range])
+            pred_slots = convert_bart_output_to_slot_preds(predictions[i - begin_prediction_range])
 
             # For error inspecting
             # intent = test_dataset.intents[i]
@@ -188,9 +188,9 @@ def main(run_args, model_config):
         train_dataset = SlotDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer)
         val_dataset = SlotDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer)
         test_dataset = SlotDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer)
-        train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=8)
-        # val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=8)
-        test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=8)
+        train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=8, num_workers=4)
+        # val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=8, num_workers=4)
+        test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=8, num_workers=4)
 
         train_seq2seq_model(model, tokenizer, train_dataloader, None, test_dataloader=test_dataloader)
 
@@ -199,12 +199,12 @@ def main(run_args, model_config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--approach", default="prompting", type=str,
+    parser.add_argument("--approach", default="manual_prompting", type=str,
                         help="Select approach between `prompting` and `fine-tuning`")
     # parser.add_argument("--model_dir", default=None, required=True, type=str, help="Path to save, load model")
     # parser.add_argument("--data_dir", default="./data", type=str, help="The input data directory")
     parser.add_argument("--dataset", default="snips", type=str, help="The input dataset")
-    parser.add_argument("--model_type", default="t5", type=str, help="Select model type")
+    parser.add_argument("--model_type", default="test-bart", type=str, help="Select model type")
     parser.add_argument('--seed', type=int, default=42, help="Seed for reproducibility")
 
     parser.add_argument('--do_train', default=True, type=bool, help="Whether to train the model.")
