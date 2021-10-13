@@ -178,6 +178,7 @@ class IntentDataset(Dataset):
             )
 
         labels = labels["input_ids"]
+        # Replace pad token id with -100 in order to ignore padding tokens during loss calculation
         labels[labels == self.tokenizer.pad_token_id] = nn.CrossEntropyLoss().ignore_index
 
         model_inputs["labels"] = labels
@@ -193,6 +194,7 @@ class SlotDataset(IntentDataset):
         self.intent_slots_mapping = self._get_intent_slots_mapping()
 
     def _get_intent_slots_mapping(self):
+        """ Returns a dictionary which maps each intent to the relevant slots based on the training set"""
         intent_slots_mapping = defaultdict(set)
         _, slots, intents = self.reader.read_dataset(mode='train')
         assert len(slots) == len(intents)
@@ -202,7 +204,13 @@ class SlotDataset(IntentDataset):
                 if tag != 'O':
                     intent_slots_mapping[intent].add(tag[2:])
 
-        return intent_slots_mapping
+        # Sort slot names to provide the template in specific order
+        intent_slots_mapping_sorted = {intent_name: sorted(slot_names)
+                                       for intent_name, slot_names in intent_slots_mapping.items()}
+        # for intent_name, slot_names in intent_slots_mapping.items():
+        #     intent_slots_mapping[intent_name] = sorted(slot_names)
+
+        return intent_slots_mapping_sorted
 
     @staticmethod
     def get_clean_slots_dict(utter: List[str], tags: List[str]):
@@ -259,7 +267,19 @@ class SlotDataset(IntentDataset):
                         output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}"
                     else:
                         output_template += f"The {SLOT_MAPPING[slot]} is none"
+
+            ##########################################################################################################
+            # Output raw slot values instead of natural language
+            # input_template = ""
+            # output_template = ""
+            # for slot in relevant_slots:
+            #     if slot in example_slots:
+            #         output_template += f"{slots_dict_without_bio[slot]}, "
+            #     else:
+            #         output_template += f"none, "
+            ##########################################################################################################
         elif isinstance(self.tokenizer, T5Tokenizer):
+            # USE TEMPLATE
             input_template = '. '
             output_template = ''
 
@@ -270,12 +290,30 @@ class SlotDataset(IntentDataset):
                         output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} "
                     else:
                         output_template += f"<extra_id_{slot_num}> none "
-                else:  # if at last iteration also add <extra_id> token at the end
+                else:  # if at last iteration also add <extra_id> (sentinel token) at the end
                     input_template += f"The {SLOT_MAPPING[slot]} is <extra_id_{slot_num}>"
                     if slot in example_slots:
                         output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} <extra_id_{slot_num + 1}>"
                     else:
                         output_template += f"<extra_id_{slot_num}> none <extra_id_{slot_num + 1}>"
+
+            # DON'T USE TEMPLATE (RAW SLOT PREDS)
+            # input_template = ''
+            # output_template = ''
+            #
+            # for slot_num, slot in enumerate(relevant_slots):
+            #     if slot_num != (len(relevant_slots) - 1):
+            #         input_template += f"<extra_id_{slot_num}> "
+            #         if slot in example_slots:
+            #             output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} "
+            #         else:
+            #             output_template += f"<extra_id_{slot_num}> none "
+            #     else:  # if at last iteration also add <extra_id> (sentinel token) at the end
+            #         input_template += f"<extra_id_{slot_num}> "
+            #         if slot in example_slots:
+            #             output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} <extra_id_{slot_num + 1}>"
+            #         else:
+            #             output_template += f"<extra_id_{slot_num}> none <extra_id_{slot_num + 1}>"
 
         return input_template, output_template
 
@@ -293,12 +331,13 @@ class SlotDataset(IntentDataset):
         input_utter.extend(input_template.split())
 
         if isinstance(self.tokenizer, BartTokenizer):
+            # use template
             output_utter = copy.deepcopy(utter)
             output_utter.extend(output_template.split())
+            # don't use template (raw slot preds)
+            # output_utter = output_template.split()
         elif isinstance(self.tokenizer, T5Tokenizer):
             output_utter = output_template.split()
-
-        # print(f"{utter=}\t{input_utter=}\t{output_utter=}")
 
         model_inputs = self.tokenizer(
             input_utter,
@@ -321,17 +360,19 @@ class SlotDataset(IntentDataset):
 
         labels = labels["input_ids"]
 
-        # decoder_input_ids = shift_tokens_right(input_ids=model_inputs['input_ids'], pad_token_id=self.tokenizer.pad_token_id,
-        #                                        decoder_start_token_id=self.tokenizer.eos_token_id)
-        # decoder_input_ids = shift_tokens_right(input_ids=labels, pad_token_id=self.tokenizer.pad_token_id,
-        #                                        decoder_start_token_id=self.tokenizer.eos_token_id)
-        # model_inputs["decoder_input_ids"] = decoder_input_ids
-
+        # Replace pad token id with -100 in order to ignore padding tokens during loss calculation
         labels[labels == self.tokenizer.pad_token_id] = nn.CrossEntropyLoss().ignore_index
         model_inputs["labels"] = labels
 
         model_inputs = {k: feature.flatten() for k, feature in model_inputs.items()}
 
         return model_inputs
+
+    # Uncomment to try out few-shot setting
+    # def __len__(self):
+    #     if self.mode == 'train':
+    #         return 1000
+    #     else:
+    #         return len(self.intents)
 
 
