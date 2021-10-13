@@ -3,9 +3,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm, trange
-from transformers import AdamW, get_linear_schedule_with_warmup
+from transformers import AdamW, get_linear_schedule_with_warmup, T5ForConditionalGeneration, T5Config
 
-from utils import intent_metrics, slot_metrics, convert_t5_output_to_slot_preds, compute_micro_f1, SLOT_MAPPING
+from utils import intent_metrics, slot_metrics, convert_t5_output_to_slot_preds, compute_micro_f1, SLOT_MAPPING, \
+    convert_bart_output_to_slot_preds
 
 
 def train(
@@ -174,9 +175,10 @@ def train_seq2seq_model(
         tokenizer,
         train_dataloader: DataLoader,
         val_dataloader: DataLoader,
-        test_dataloader: DataLoader
+        test_dataloader: DataLoader,
+        model_weights_path='./t5-small_parameters.pt'
 ):
-    n_epochs = 3
+    n_epochs = 6
     learning_rate = 1e-4
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -189,7 +191,7 @@ def train_seq2seq_model(
 
     progress_bar = trange(num_training_steps, desc="Total Batches")
 
-    best_val_loss = np.float("inf")
+    best_val_f1 = 0.0
     model.train()
     for epoch in range(n_epochs):
         running_loss = 0.0
@@ -210,23 +212,30 @@ def train_seq2seq_model(
 
             if (i % int(len(train_dataloader) / 4) == 0 or i == len(train_dataloader) - 1) and i != 0:
                 print(f" Epoch: {epoch + 1} / {n_epochs}, Training Batch: {i + 1} / {len(train_dataloader)},"
-                      f" Loss: {running_loss / i: .3f}, Learning Rate: {scheduler.get_last_lr()}")
+                      f" Loss: {running_loss / i: .3f}, Learning Rate: {scheduler.get_last_lr()[0]: .5f}")
 
                 ########## debugging ###########
-                logits = outputs.logits
-                predictions = torch.argmax(logits, dim=-1)
+                # logits = outputs.logits
+                # predictions = torch.argmax(logits, dim=-1)
 
             progress_bar.update(1)
 
-        # val_loss = evaluate_seq2seq(model, val_dataloader, phase='dev')
-        # if val_loss < best_val_loss:
-        #     best_val_loss = val_loss
+        if val_dataloader is not None:
+            val_f1 = evaluate_seq2seq_model(model, tokenizer, val_dataloader, phase='dev')
+            if model_weights_path is not None and val_f1 > best_val_f1:
+                torch.save(model.state_dict(), model_weights_path)
+                best_val_f1 = val_f1
 
-    if test_dataloader is not None:
-        evaluate_seq2seq_model(model, tokenizer, test_dataloader, phase='test')
+    if test_dataloader is not None and model_weights_path is not None:
+        # TODO uncomment to load a pretrained model
+        # checkpoint = 't5-small'
+        # config = T5Config.from_pretrained(checkpoint)
+        # model = T5ForConditionalGeneration(config=config)
+        # model.load_state_dict(torch.load(model_weights_path))
+        _ = evaluate_seq2seq_model(model, tokenizer, test_dataloader, phase='test')
 
 
-def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
+def evaluate_seq2seq_model(model, tokenizer, dataloader, phase='dev'):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
@@ -235,20 +244,16 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
     preds_lst = []
     labels_lst = []
 
-    for batch in tqdm(dataloader):
+    for batch in dataloader:
         with torch.no_grad():
             batch = {k: v.to(device) for k, v in batch.items()}
             input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
 
             gen_kwargs = {"max_length": 64, "early_stopping": False}  # , "num_beams": 5, }
             generated_tokens = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
-                                              # decoder_start_token_id=tokenizer.eos_token_id)
 
             # Replace -100 in the labels as we can't decode them.
-            # labels = np.where(labels != -100, labels, model.config.pad_token_id)
             labels[labels == nn.CrossEntropyLoss().ignore_index] = model.config.pad_token_id
-
-            # F1 calculation
 
             preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=False)
             labels = tokenizer.batch_decode(labels, skip_special_tokens=False)
@@ -256,13 +261,14 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
             preds_lst.extend(preds)
             labels_lst.extend(labels)
 
-    for pred, label in zip(preds_lst, labels_lst):
-        print(f"{pred=} \n{label=}\n\n")
-    print('#####################')
+    if isinstance(model, T5ForConditionalGeneration):
+        cleaned_preds = [convert_t5_output_to_slot_preds(pred) for pred in preds_lst]
+        cleaned_labels = [convert_t5_output_to_slot_preds(label) for label in labels_lst]
+    else:
+        cleaned_preds = [convert_bart_output_to_slot_preds(pred, full_sentence_output=True) for pred in preds_lst]
+        cleaned_labels = [convert_bart_output_to_slot_preds(label, full_sentence_output=True) for label in labels_lst]
 
-    cleaned_preds = [convert_t5_output_to_slot_preds(pred) for pred in preds_lst]
-    cleaned_labels = [convert_t5_output_to_slot_preds(label) for label in labels_lst]
-
+    # F1 calculation
     scores = {}
     for slot in SLOT_MAPPING:
         scores[slot] = {
@@ -270,12 +276,9 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
             "false_positives": 0,
             "false_negatives": 0
         }
-    acc = 0.0
-    counter = 0
+
     for i, (test_example_preds, test_example_labels) in enumerate(zip(cleaned_preds, cleaned_labels)):
         dataset = dataloader.dataset
-        utter = dataset.sentences[i]
-        tags = dataset.slots[i]
         intent = dataset.intents[i]
         intent_slot_mapping = dataset.intent_slots_mapping[intent]
 
@@ -287,7 +290,7 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
                     scores[slot_name]["false_positives"] += 1
                 else:
                     if gold_slot == slot_pred:
-                        print(f"TPTest example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                        # print(f"TPTest example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                         scores[slot_name]["true_positives"] += 1
                     else:
                         print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
@@ -295,10 +298,12 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase):
                         scores[slot_name]["false_negatives"] += 1
             else:
                 if gold_slot != 'none':
-                    # print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                    print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                     scores[slot_name]["false_negatives"] += 1
-    # print(f"Accuracy= {acc / counter: .3f}\t{acc=}{counter=}")
+
     prec, rec, f1 = compute_micro_f1(scores=scores)
     print(f"Micro F1 score = {f1: .3f}\nMicro Precision score = {prec: .3f}\nMicro Recall score = {rec: .3f}")
+
+    return f1
 
 
