@@ -193,16 +193,16 @@ def main(run_args, model_config):
         # tokenizer = BartTokenizer.from_pretrained(checkpoint)
         # model = BartForConditionalGeneration.from_pretrained(checkpoint, config=config)
 
-        checkpoint = 't5-small'  # 't5-base'
+        checkpoint = 't5-base'  # 't5-small'
         tokenizer = T5Tokenizer.from_pretrained(checkpoint)
         model = T5ForConditionalGeneration.from_pretrained(checkpoint)
 
         train_dataset = SlotDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer)
         val_dataset = SlotDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer)
         test_dataset = SlotDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer)
-        train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=8, num_workers=4)
-        val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=8, num_workers=4)
-        test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=8, num_workers=4)
+        train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=4, num_workers=4)
+        val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=4, num_workers=4)
+        test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=4, num_workers=4)
 
         train_seq2seq_model(model, tokenizer, train_dataloader, val_dataloader, test_dataloader, model_weights_path=None)
 
