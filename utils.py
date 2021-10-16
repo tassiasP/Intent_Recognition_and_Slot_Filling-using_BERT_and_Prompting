@@ -31,52 +31,6 @@ def intent_metrics(labels, preds):
     return accuracy, f1
 
 
-def intent_metrics_bart(eval_pred: EvalPrediction):
-    logits, labels = eval_pred
-    logits = logits[0]
-    preds = np.argmax(logits, axis=-1)
-    # Replace -100 (CrossEntropy's ignore_index) in the labels as we can't decode them.
-    labels = np.where(labels != -100, labels, 1)  # 1 is the pad_token_id
-    # For error inspection
-    # print(f"{preds=}\n\n {labels=}")
-
-    metric = load_metric("accuracy")
-
-    return metric.compute(predictions=preds.flatten(), references=labels.flatten())
-
-
-def convert_bart_output_to_slot_preds(prediction_output, full_sentence_output=False):
-    # example:
-    #   input = "<s> The playlist owner is none</s>The playlist is grime instrumentals</s> \
-    #   The artist is sabrina salerno</s>The track name is none</s>The music item is none</s> \
-    #   The</s></s></s></s></s></s></s></s></s></s></s></s></s></s></s></s></s></s>"
-    #
-    #   output: {"playlist owner": "none", "playlist": "grime instrumentals", "artist": "sabrina salerno",
-    #             "track name": "none", "music item": none}
-    if full_sentence_output:
-        slot_preds = {}
-        # for sent in prediction_output.split('</s>'):
-        for sent in prediction_output.split('.'):
-            match = re.search(r"(?<=The).*", sent)
-            if match:
-                match = match.group(0).strip()
-                # print(match)
-                if match != '':
-                    slot, _, value = match.partition(' is ')
-                    slot, value = slot.strip(), value.strip()
-
-                    try:
-                        slot_preds[INVERTED_SLOT_MAPPING[slot]] = value
-                    except KeyError:
-                        continue
-    else:
-        # Skip the special tokens (</s> and <s>) at the beginning
-        prediction = prediction_output[7:]
-        slot_preds = [slot_pred.strip() for slot_pred in prediction.split(',')[:-1]]
-
-    return slot_preds
-
-
 def convert_t5_output_to_slot_preds(pred):
     """ Converts raw prediction into slot prediction using the T5 sentinel tokens (<extra_id_0>, <extra_id_1> etc.)"""
     match = re.split(r"<extra_id_\d+>", pred)

@@ -28,7 +28,6 @@ class InputExample:
 
 
 class JointProcessor:
-
     def __init__(self, model_name: str, max_len=64):
         super().__init__()
         self.tokenizer = BertTokenizerFast.from_pretrained(model_name)
@@ -128,7 +127,6 @@ def get_dataloader(dataset_name: str, mode: str, batch_size: int, model_name: st
 
 
 class IntentDataset(Dataset):
-
     def __init__(self, dataset: str, mode: str, tokenizer, max_len=64):
         super().__init__()
         self.dataset = dataset
@@ -140,25 +138,8 @@ class IntentDataset(Dataset):
         self.reader = Reader(self.dataset)
         self.sentences, self.slots, self.intents = self.reader.read_dataset(mode=self.mode)
 
-    def __len__(self):
-        return len(self.intents)
-
-    def __getitem__(self, index):
-        utter = self.sentences[index]
-        intent = self.intents[index]
-
-        prompt = '. This sentence refers to <mask>'
-        input_utter = copy.deepcopy(utter)
-        input_utter.extend(prompt.split())
-        #####################
-        # output_utter = INTENT_MAPPING[intent]  # utter + '.' + prompt + INTENT_MAPPING[intent]
-        #####################
-        output_utter = copy.deepcopy(utter)
-        output_utter.extend(prompt.split()[:-1])
-        output_utter.append(INTENT_MAPPING[intent])  # utter + prompt + INTENT_MAPPING[intent]
-
-        # print(f"{utter=}\t{input_utter=}\t{output_utter=}")
-
+    def convert_utters_to_model_inputs(self, input_utter, output_utter):
+        """Utilizes tokenizer to convert tokens to ids that will be fed to the model"""
         model_inputs = self.tokenizer(
             input_utter,
             padding="max_length",
@@ -171,7 +152,7 @@ class IntentDataset(Dataset):
             labels = self.tokenizer(
                 output_utter,
                 padding="max_length",
-                max_length=self.max_len,
+                max_length=int(self.max_len/2),
                 truncation=True,
                 is_split_into_words=True,
                 return_tensors='pt'
@@ -186,12 +167,27 @@ class IntentDataset(Dataset):
 
         return model_inputs
 
+    def __len__(self):
+        return len(self.intents)
+
+    def __getitem__(self, index):
+        utter = self.sentences[index]
+        intent = self.intents[index]
+
+        prompt = '. This sentence refers to <extra_id_0>'
+        input_utter = copy.deepcopy(utter)
+        input_utter.extend(prompt.split())
+
+        output_utter = '<extra_id_0>' + INTENT_MAPPING[intent] + '<extra_id_1>'
+
+        return self.convert_utters_to_model_inputs(input_utter=input_utter, output_utter=output_utter)
+
 
 class SlotDataset(IntentDataset):
-
-    def __init__(self, dataset: str, mode: str, tokenizer, max_len=128):
+    def __init__(self, dataset: str, mode: str, tokenizer: T5Tokenizer, max_len: int = 140, use_prompting: bool = True):
         super().__init__(dataset, mode, tokenizer, max_len)
         self.intent_slots_mapping = self._get_intent_slots_mapping()
+        self.use_prompting = use_prompting
 
     def _get_intent_slots_mapping(self):
         """ Returns a dictionary which maps each intent to the relevant slots based on the training set"""
@@ -207,8 +203,6 @@ class SlotDataset(IntentDataset):
         # Sort slot names to provide the template in specific order
         intent_slots_mapping_sorted = {intent_name: sorted(slot_names)
                                        for intent_name, slot_names in intent_slots_mapping.items()}
-        # for intent_name, slot_names in intent_slots_mapping.items():
-        #     intent_slots_mapping[intent_name] = sorted(slot_names)
 
         return intent_slots_mapping_sorted
 
@@ -244,42 +238,13 @@ class SlotDataset(IntentDataset):
 
     def get_template(self, relevant_slots: set[str], slots_dict_without_bio: dict):
         example_slots = {slot for slot in slots_dict_without_bio}
-        # print(f'{example_slots=}')
         assert example_slots.issubset(relevant_slots)
 
         eos_token = self.tokenizer.eos_token
         sep_token = self.tokenizer.sep_token
         separator = '.'  # sep_token
 
-        if isinstance(self.tokenizer, BartTokenizer):
-            input_template = f"{separator}"
-            output_template = f"{separator}"
-            for slot in relevant_slots:
-                if slot != list(relevant_slots)[-1]:
-                    input_template += f"The {SLOT_MAPPING[slot]} is <mask>{separator}"
-                    if slot in example_slots:
-                        output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}{separator}"
-                    else:
-                        output_template += f"The {SLOT_MAPPING[slot]} is none{separator}"
-                else:  # if at last iteration don't add separator token at the end
-                    input_template += f"The {SLOT_MAPPING[slot]} is <mask>"
-                    if slot in example_slots:
-                        output_template += f"The {SLOT_MAPPING[slot]} is {slots_dict_without_bio[slot]}"
-                    else:
-                        output_template += f"The {SLOT_MAPPING[slot]} is none"
-
-            ##########################################################################################################
-            # Output raw slot values instead of natural language
-            # input_template = ""
-            # output_template = ""
-            # for slot in relevant_slots:
-            #     if slot in example_slots:
-            #         output_template += f"{slots_dict_without_bio[slot]}, "
-            #     else:
-            #         output_template += f"none, "
-            ##########################################################################################################
-        elif isinstance(self.tokenizer, T5Tokenizer):
-            # USE TEMPLATE
+        if self.use_prompting:
             input_template = '. '
             output_template = ''
 
@@ -290,30 +255,29 @@ class SlotDataset(IntentDataset):
                         output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} "
                     else:
                         output_template += f"<extra_id_{slot_num}> none "
-                else:  # if at last iteration also add <extra_id> (sentinel token) at the end
+                else:  # if at last iteration also add <extra_id> (sentinel token) at the end of the output
                     input_template += f"The {SLOT_MAPPING[slot]} is <extra_id_{slot_num}>"
                     if slot in example_slots:
                         output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} <extra_id_{slot_num + 1}>"
                     else:
                         output_template += f"<extra_id_{slot_num}> none <extra_id_{slot_num + 1}>"
+        else:
+            input_template = ''
+            output_template = ''
 
-            # DON'T USE TEMPLATE (RAW SLOT PREDS)
-            # input_template = ''
-            # output_template = ''
-            #
-            # for slot_num, slot in enumerate(relevant_slots):
-            #     if slot_num != (len(relevant_slots) - 1):
-            #         input_template += f"<extra_id_{slot_num}> "
-            #         if slot in example_slots:
-            #             output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} "
-            #         else:
-            #             output_template += f"<extra_id_{slot_num}> none "
-            #     else:  # if at last iteration also add <extra_id> (sentinel token) at the end
-            #         input_template += f"<extra_id_{slot_num}> "
-            #         if slot in example_slots:
-            #             output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} <extra_id_{slot_num + 1}>"
-            #         else:
-            #             output_template += f"<extra_id_{slot_num}> none <extra_id_{slot_num + 1}>"
+            for slot_num, slot in enumerate(relevant_slots):
+                if slot_num != (len(relevant_slots) - 1):
+                    input_template += f"<extra_id_{slot_num}> "
+                    if slot in example_slots:
+                        output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} "
+                    else:
+                        output_template += f"<extra_id_{slot_num}> none "
+                else:  # if at last iteration also add <extra_id> (sentinel token) at the end
+                    input_template += f"<extra_id_{slot_num}> "
+                    if slot in example_slots:
+                        output_template += f"<extra_id_{slot_num}> {slots_dict_without_bio[slot]} <extra_id_{slot_num + 1}>"
+                    else:
+                        output_template += f"<extra_id_{slot_num}> none <extra_id_{slot_num + 1}>"
 
         return input_template, output_template
 
@@ -330,48 +294,14 @@ class SlotDataset(IntentDataset):
         input_utter = copy.deepcopy(utter)
         input_utter.extend(input_template.split())
 
-        if isinstance(self.tokenizer, BartTokenizer):
-            # use template
-            output_utter = copy.deepcopy(utter)
-            output_utter.extend(output_template.split())
-            # don't use template (raw slot preds)
-            # output_utter = output_template.split()
-        elif isinstance(self.tokenizer, T5Tokenizer):
-            output_utter = output_template.split()
+        output_utter = output_template.split()
 
-        model_inputs = self.tokenizer(
-            input_utter,
-            padding="max_length",
-            max_length=self.max_len,
-            truncation=True,
-            is_split_into_words=True,
-            return_tensors='pt'
-        )
-
-        with self.tokenizer.as_target_tokenizer():
-            labels = self.tokenizer(
-                output_utter,
-                padding="max_length",
-                max_length=self.max_len,
-                truncation=True,
-                is_split_into_words=True,
-                return_tensors='pt'
-            )
-
-        labels = labels["input_ids"]
-
-        # Replace pad token id with -100 in order to ignore padding tokens during loss calculation
-        labels[labels == self.tokenizer.pad_token_id] = nn.CrossEntropyLoss().ignore_index
-        model_inputs["labels"] = labels
-
-        model_inputs = {k: feature.flatten() for k, feature in model_inputs.items()}
-
-        return model_inputs
+        return self.convert_utters_to_model_inputs(input_utter=input_utter, output_utter=output_utter)
 
     # Uncomment to try out few-shot setting
     # def __len__(self):
     #     if self.mode == 'train':
-    #         return 1000
+    #         return 500  # 1000
     #     else:
     #         return len(self.intents)
 
