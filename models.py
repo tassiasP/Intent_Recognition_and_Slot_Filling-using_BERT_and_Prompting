@@ -4,7 +4,6 @@ from transformers import BertConfig, BertModel, T5ForConditionalGeneration
 
 
 class JointBert(nn.Module):
-
     def __init__(self, config, num_intent_labels, num_slot_labels):
         super(JointBert, self).__init__()
         self.num_intent_labels = num_intent_labels
@@ -18,9 +17,11 @@ class JointBert(nn.Module):
         self.slot_head = nn.Linear(self.bert_conf.hidden_size, self.num_slot_labels)
 
     def forward(self, input_ids, attention_mask, token_type_ids):
-        outputs = self.bert(input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            token_type_ids=token_type_ids)
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+        )
         slots_output = outputs[0]
         intent_output = outputs[1]
 
@@ -45,7 +46,9 @@ class T5PromptTuningMixin:
         T5PromptTuningMixin.freeze_model_params(model)
 
         print("Initializing soft prompt...")
-        model.initialize_soft_prompt(initialize_from_vocab=initialize_from_vocab, random_range=random_range)
+        model.initialize_soft_prompt(
+            initialize_from_vocab=initialize_from_vocab, random_range=random_range
+        )
 
         return model
 
@@ -67,7 +70,9 @@ class T5PromptTuningMixin:
         if initialize_from_vocab:
             init_prompt_value = self.shared.weight[:n_tokens].clone().detach()
         else:
-            init_prompt_value = torch.FloatTensor(n_tokens, self.model_dim).uniform_(-random_range, random_range)
+            init_prompt_value = torch.FloatTensor(n_tokens, self.model_dim).uniform_(
+                -random_range, random_range
+            )
 
         self.soft_prompt = nn.Embedding(n_tokens, self.model_dim)
         # Initialize weight
@@ -92,16 +97,23 @@ class T5PromptTuningMixin:
 
         n_batches = attention_mask.shape[0]
 
-        return torch.cat([torch.full((n_batches, self.n_tokens), 1).to(self.device), attention_mask], dim=1)
+        return torch.cat(
+            [torch.full((n_batches, self.n_tokens), 1).to(self.device), attention_mask],
+            dim=1,
+        )
 
     @torch.no_grad()
     def generate(self, *args, **kwargs):
-        kwargs['input_ids'] = kwargs['input_ids'].to(self.device)
-        if kwargs['input_ids'] is not None:
-            inputs_embeds = self._cat_learned_embedding_to_input(kwargs['input_ids']).to(self.device)
+        kwargs["input_ids"] = kwargs["input_ids"].to(self.device)
+        if kwargs["input_ids"] is not None:
+            inputs_embeds = self._cat_learned_embedding_to_input(
+                kwargs["input_ids"]
+            ).to(self.device)
 
-        if kwargs['attention_mask'] is not None:
-            attention_mask = self._extend_attention_mask(kwargs['attention_mask']).to(self.device)
+        if kwargs["attention_mask"] is not None:
+            attention_mask = self._extend_attention_mask(kwargs["attention_mask"]).to(
+                self.device
+            )
 
         return super().generate(inputs_embeds, attention_mask)
 
@@ -115,7 +127,9 @@ class T5PromptTuningMixin:
         return_dict=None,
     ):
         if input_ids is not None:
-            inputs_embeds = self._cat_learned_embedding_to_input(input_ids).to(self.device)
+            inputs_embeds = self._cat_learned_embedding_to_input(input_ids).to(
+                self.device
+            )
         if attention_mask is not None:
             attention_mask = self._extend_attention_mask(attention_mask).to(self.device)
 
@@ -131,7 +145,3 @@ class T5PromptTuningMixin:
 class T5PromptTuningLM(T5PromptTuningMixin, T5ForConditionalGeneration):
     def __init__(self, config):
         super().__init__(config)
-
-
-
-

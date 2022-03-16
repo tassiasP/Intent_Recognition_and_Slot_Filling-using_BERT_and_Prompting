@@ -18,7 +18,7 @@ def set_seed(seed):
 
 
 def slot_metrics(labels, preds):
-    f1 = seqeval_f1_score(y_true=labels, y_pred=preds, mode='strict', scheme=IOB2)
+    f1 = seqeval_f1_score(y_true=labels, y_pred=preds, mode="strict", scheme=IOB2)
 
     return f1
 
@@ -26,13 +26,13 @@ def slot_metrics(labels, preds):
 def intent_metrics(labels, preds):
     labels, preds = np.array(labels), np.array(preds)
     accuracy = (labels == preds).mean()
-    f1 = sklearn_f1_score(y_true=labels, y_pred=preds, average='weighted')
+    f1 = sklearn_f1_score(y_true=labels, y_pred=preds, average="weighted")
 
     return accuracy, f1
 
 
 def convert_t5_output_to_slot_preds(pred):
-    """ Converts raw prediction into slot prediction using the T5 sentinel tokens (<extra_id_0>, <extra_id_1> etc.)"""
+    """Converts raw prediction into slot prediction using the T5 sentinel tokens (<extra_id_0>, <extra_id_1> etc.)"""
     match = re.split(r"<extra_id_\d+>", pred)
     if match:
         # Skip the <pad> and </s> (eos) tokens at the start and the end of the output respectively
@@ -48,7 +48,9 @@ def compute_micro_f1(scores: dict):
         fps += slot_scores["false_positives"]
         fns += slot_scores["false_negatives"]
 
-    print(f"# of True Positives= {tps}\t# of False Positives= {fps}\t# of False Negatives= {fns}")
+    print(
+        f"# of True Positives= {tps}\t# of False Positives= {fps}\t# of False Negatives= {fns}"
+    )
     micro_precision = tps / (tps + fps)
     micro_recall = tps / (tps + fns)
     micro_f1 = 2 * micro_precision * micro_recall / (micro_precision + micro_recall)
@@ -65,7 +67,7 @@ INTENT_MAPPING = {
     "PlayMusic": "music",
     "RateBook": "book",
     "SearchCreativeWork": "creative work",
-    "SearchScreeningEvent": "movie"
+    "SearchScreeningEvent": "movie",
 }
 
 SLOT_MAPPING = {
@@ -108,9 +110,7 @@ SLOT_MAPPING = {
     "state": "state",
     "timeRange": "time range",
     "track": "track to play",
-    "year": "year"
+    "year": "year",
 }
 
-INVERTED_SLOT_MAPPING = {
-    v: k for k, v in SLOT_MAPPING.items()
-}
+INVERTED_SLOT_MAPPING = {v: k for k, v in SLOT_MAPPING.items()}
