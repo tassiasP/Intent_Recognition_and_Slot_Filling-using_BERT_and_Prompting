@@ -1,23 +1,22 @@
 import argparse
 
+from omegaconf import OmegaConf
 import torch.cuda
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Subset
-from omegaconf import OmegaConf
 from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer, T5Config, T5Tokenizer, T5ForConditionalGeneration
 from transformers import logging
 
 from joint_dataset import get_dataloader, IntentDataset, SlotDataset
-from models import JointBert
+from models import JointBert, T5PromptTuningLM
 from train_evaluate import train, train_seq2seq_model
-from utils import set_seed, INTENT_MAPPING, intent_metrics_bart
+from utils import set_seed, INTENT_MAPPING, ATIS_INTENT_MAPPING
 from reader import Reader
 
 
 def main(run_args, model_config):
     torch.cuda.empty_cache()
     set_seed(run_args.seed)
-    # logging.set_verbosity(logging.CRITICAL)
 
     reader = Reader(run_args.dataset)
     reader.construct_intent_and_slot_vocabs(write_to_disk=True)
@@ -63,20 +62,32 @@ def main(run_args, model_config):
             # checkpoint = './test-t5-intent/checkpoint-2000'
             model = T5ForConditionalGeneration.from_pretrained(checkpoint)
 
-            train_dataset = IntentDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer)
-            val_dataset = IntentDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer)
-            test_dataset = IntentDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer)
+            use_prompting = True
+
+            train_dataset = IntentDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer,
+                                          use_prompting=use_prompting)
+            val_dataset = IntentDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer,
+                                        use_prompting=use_prompting)
+            test_dataset = IntentDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer,
+                                         use_prompting=use_prompting)
+
+            # Try out a subset of the training set (few-shot)
+            indices = torch.randperm(len(train_dataset))[:200]
+            train_dataset = Subset(train_dataset, indices=indices)
 
             # Use Huggingface's Trainer class for training and evaluation
             training_args = Seq2SeqTrainingArguments(
                 output_dir="test-t5-intent",
-                evaluation_strategy="epoch",
-                save_strategy="epoch",
+                evaluation_strategy="steps",
+                save_strategy="steps",
                 dataloader_num_workers=4,
                 per_device_train_batch_size=32,
                 per_device_eval_batch_size=32,
-                num_train_epochs=6,
+                num_train_epochs=18,
+                logging_steps=50,
+                learning_rate=1e-3,
                 load_best_model_at_end=True,
+                greater_is_better=False,
                 predict_with_generate=True  # important in order to prevent teacher-forcing during inference
             )
 
@@ -94,7 +105,8 @@ def main(run_args, model_config):
             predictions = tokenizer.batch_decode(predict_results.predictions, skip_special_tokens=True)
 
             # Evaluation
-            gold_intents = [INTENT_MAPPING[intent] for intent in test_dataset.intents]
+            gold_intents = [INTENT_MAPPING[intent] if run_args.dataset == 'snips' else ATIS_INTENT_MAPPING[intent]
+                            for intent in test_dataset.intents]
             correct_preds = sum(1 for pred, label in zip(predictions, gold_intents) if pred.strip() == label)
             accuracy = correct_preds / len(test_dataset)
             print(f"\n{accuracy = :.3f}\n")
@@ -105,20 +117,67 @@ def main(run_args, model_config):
                     print(f"True label: {init_label: >15} \tMapped label: {label: >15}\tPrediction: {pred}")
 
         elif run_args.predict_slots:
-            checkpoint = 't5-small'  # alternatively use t5-base
+            logging.set_verbosity(logging.CRITICAL)
+            use_prompting = True
+
+            checkpoint = 't5-small'  # alternatively use 't5-base'
             tokenizer = T5Tokenizer.from_pretrained(checkpoint)
             model = T5ForConditionalGeneration.from_pretrained(checkpoint)
 
-            train_dataset = SlotDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer, use_prompting=True)
-            val_dataset = SlotDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer, use_prompting=True)
-            test_dataset = SlotDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer, use_prompting=True)
+            # As an extra experiment, try to freeze decoder's parameters
+            # for param in model.get_decoder().parameters():
+            #     param.requires_grad = False
 
-            train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=8, num_workers=4)
-            val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=8, num_workers=4)
-            test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=8, num_workers=4)
+            print(f"Number of trainable parameters = {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
 
-            train_seq2seq_model(model, tokenizer, train_dataloader, val_dataloader, test_dataloader,
-                                model_weights_path=None)
+            # Test soft-prompts
+            # model = T5PromptTuningLM.from_pretrained(checkpoint)
+            # print(f"Number of trainable parameters: {model.get_num_trainable_params()}")
+
+            train_dataset = SlotDataset(dataset=run_args.dataset, mode='train', tokenizer=tokenizer,
+                                        use_prompting=use_prompting)
+            val_dataset = SlotDataset(dataset=run_args.dataset, mode='dev', tokenizer=tokenizer,
+                                      use_prompting=use_prompting)
+            test_dataset = SlotDataset(dataset=run_args.dataset, mode='test', tokenizer=tokenizer,
+                                       use_prompting=use_prompting)
+
+            # Try out a subset of the training set (few-shot)
+            indices = torch.randperm(len(train_dataset))[:200]
+            train_dataset = Subset(train_dataset, indices=indices)
+
+            # Few-shot for 2 intents
+            # few_shot_labels = ['RateBook']
+            # # few_shot_labels = ['PlayMusic', 'GetWeather']
+            # few_shot_labels = ['AddToPlaylist', 'BookRestaurant']
+            # full_indices = [i for i in range(len(train_dataset)) if train_dataset.intents[i] not in few_shot_labels]
+            #
+            # few_shot_indices_1 = torch.tensor(
+            #     [i for i in range(len(train_dataset)) if train_dataset.intents[i] in few_shot_labels[0]])
+            # few_shot_indices_2 = torch.tensor(
+            #     [i for i in range(len(train_dataset)) if train_dataset.intents[i] in few_shot_labels[1]])
+            #
+            # num_of_examples_per_intent = 20
+            # indices_to_keep_1 = torch.randperm(len(few_shot_indices_1))[:num_of_examples_per_intent]
+            # indices_to_keep_2 = torch.randperm(len(few_shot_indices_2))[:num_of_examples_per_intent]
+            #
+            # few_shot_indices_1 = few_shot_indices_1[indices_to_keep_1].tolist()
+            # few_shot_indices_2 = few_shot_indices_2[indices_to_keep_2].tolist()
+            #
+            # final_train_indices = [*full_indices, *few_shot_indices_1, *few_shot_indices_2]
+            # # final_train_indices = [*full_indices, *few_shot_indices_1]
+            # train_dataset = Subset(train_dataset, final_train_indices)
+            #
+            # val_indices = [i for i in range(len(val_dataset)) if val_dataset.intents[i] in few_shot_labels]
+            # test_indices = [i for i in range(len(test_dataset)) if test_dataset.intents[i] in few_shot_labels]
+            # val_dataset = Subset(val_dataset, val_indices)
+            # test_dataset = Subset(test_dataset, test_indices)
+
+            batch_size = 8
+            train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=batch_size, num_workers=4)
+            val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=batch_size, num_workers=4)
+            test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size, num_workers=4)
+
+            train_seq2seq_model(model, tokenizer, train_dataloader, val_dataloader, test_dataloader)
     else:
         print("This approach is not supported, choose between `fine-tuning` and `prompting`")
 
@@ -126,7 +185,7 @@ def main(run_args, model_config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--dataset", default="snips", type=str, help="The input dataset")
+    parser.add_argument("--dataset", default="atis", type=str, help="The input dataset")
     parser.add_argument("--approach", default="prompting", type=str,
                         help="Select approach between `prompting` and `fine-tuning`")
     parser.add_argument("--predict_intent", default=False, type=bool, help="Select whether to predict the intent")
