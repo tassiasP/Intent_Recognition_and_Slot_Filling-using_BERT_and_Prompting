@@ -6,7 +6,7 @@ from tqdm import tqdm, trange
 from transformers import AdamW, get_linear_schedule_with_warmup, T5ForConditionalGeneration, T5Config
 
 from utils import intent_metrics, slot_metrics, convert_t5_output_to_slot_preds, compute_micro_f1, SLOT_MAPPING, \
-    convert_bart_output_to_slot_preds
+    ATIS_SLOT_MAPPING
 
 
 def train(
@@ -178,8 +178,8 @@ def train_seq2seq_model(
         test_dataloader: DataLoader,
         model_weights_path='./t5-small_parameters.pt'
 ):
-    n_epochs = 6
-    learning_rate = 1e-4
+    n_epochs = 30
+    learning_rate = 1e-3
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
@@ -195,7 +195,6 @@ def train_seq2seq_model(
     model.train()
     for epoch in range(n_epochs):
         running_loss = 0.0
-
         for i, batch in enumerate(train_dataloader):
             optimizer.zero_grad()
             batch = {k: v.to(device) for k, v in batch.items()}
@@ -214,10 +213,6 @@ def train_seq2seq_model(
                 print(f" Epoch: {epoch + 1} / {n_epochs}, Training Batch: {i + 1} / {len(train_dataloader)},"
                       f" Loss: {running_loss / i: .3f}, Learning Rate: {scheduler.get_last_lr()[0]: .5f}")
 
-                ########## debugging ###########
-                # logits = outputs.logits
-                # predictions = torch.argmax(logits, dim=-1)
-
             progress_bar.update(1)
 
         if val_dataloader is not None:
@@ -226,12 +221,11 @@ def train_seq2seq_model(
                 torch.save(model.state_dict(), model_weights_path)
                 best_val_f1 = val_f1
 
-    if test_dataloader is not None and model_weights_path is not None:
-        # TODO uncomment to load a pretrained model
-        # checkpoint = 't5-small'
-        # config = T5Config.from_pretrained(checkpoint)
-        # model = T5ForConditionalGeneration(config=config)
-        # model.load_state_dict(torch.load(model_weights_path))
+    if test_dataloader is not None:
+        checkpoint = 't5-small'
+        config = T5Config.from_pretrained(checkpoint)
+        model = T5ForConditionalGeneration(config=config)
+        model.load_state_dict(torch.load(model_weights_path))
         _ = evaluate_seq2seq_model(model, tokenizer, test_dataloader, phase='test')
 
 
@@ -249,7 +243,7 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase='dev'):
             batch = {k: v.to(device) for k, v in batch.items()}
             input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
 
-            gen_kwargs = {"max_length": 64, "early_stopping": False}  # , "num_beams": 5, }
+            gen_kwargs = {"max_length": 300, "early_stopping": False}
             generated_tokens = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs)
 
             # Replace -100 in the labels as we can't decode them.
@@ -261,48 +255,78 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase='dev'):
             preds_lst.extend(preds)
             labels_lst.extend(labels)
 
-    if isinstance(model, T5ForConditionalGeneration):
-        cleaned_preds = [convert_t5_output_to_slot_preds(pred) for pred in preds_lst]
-        cleaned_labels = [convert_t5_output_to_slot_preds(label) for label in labels_lst]
-    else:
-        cleaned_preds = [convert_bart_output_to_slot_preds(pred, full_sentence_output=True) for pred in preds_lst]
-        cleaned_labels = [convert_bart_output_to_slot_preds(label, full_sentence_output=True) for label in labels_lst]
+    cleaned_preds = [convert_t5_output_to_slot_preds(pred) for pred in preds_lst]
+    cleaned_labels = [convert_t5_output_to_slot_preds(label) for label in labels_lst]
+
+    assert len(cleaned_preds) == len(cleaned_labels)
+    # for pr, lbl in zip(cleaned_preds, cleaned_labels):
+    #     if len(pr) != len(lbl):
+    #         print(f'Not equal lengths. Difference of {(len(pr)-len(lbl))} slots')
 
     # F1 calculation
     scores = {}
-    for slot in SLOT_MAPPING:
+    mapping = SLOT_MAPPING if dataloader.dataset.dataset == 'snips' else ATIS_SLOT_MAPPING
+    for slot in mapping:
         scores[slot] = {
             "true_positives": 0,
             "false_positives": 0,
             "false_negatives": 0
         }
 
+    # acc is defined as how many of the gold labels does the model find regardless of order and duplicates
+    acc = 0.0
+
     for i, (test_example_preds, test_example_labels) in enumerate(zip(cleaned_preds, cleaned_labels)):
         dataset = dataloader.dataset
+        #################
+        # for 2-intent few-shot setting (should be removed otherwise)
+        # subset = dataloader.dataset
+        # dataset = subset.dataset
+        # i = subset.indices[i]
+
+        # assert intent in ['AddToPlaylist', 'BookRestaurant']
+        #################
+
         intent = dataset.intents[i]
         intent_slot_mapping = dataset.intent_slots_mapping[intent]
 
-        for slot_name, slot_pred, gold_slot in zip(intent_slot_mapping, test_example_preds, test_example_labels):
+        curr_preds = [val.strip() for val in test_example_preds if val != ' none']
+        curr_labels = [val.strip() for val in test_example_labels if val != ' none']
+
+        if len(curr_labels) != 0:
+            acc += sum(1 for lbl in curr_labels if lbl in curr_preds) / len(curr_labels)
+
+        # for slot_name, slot_pred, gold_slot in zip(intent_slot_mapping, test_example_preds, test_example_labels):
+        assert len(intent_slot_mapping) == len(test_example_labels)
+        for j, (slot_name, gold_slot) in enumerate(zip(intent_slot_mapping, test_example_labels)):
+            try:
+                slot_pred = test_example_preds[j]
+            except IndexError:
+                slot_pred = 'none'
             slot_pred, gold_slot = slot_pred.strip(), gold_slot.strip()
             if slot_pred != 'none':
                 if gold_slot == 'none':
-                    print(f"Test example {i+1}\t{slot_name=}\t{slot_pred=}")
+                    # print(f"Test example {i+1}\t{slot_name=}\t{slot_pred=}")
                     scores[slot_name]["false_positives"] += 1
                 else:
                     if gold_slot == slot_pred:
                         # print(f"TPTest example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                         scores[slot_name]["true_positives"] += 1
                     else:
-                        print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                        # print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                         # Maybe skip the following?
                         scores[slot_name]["false_negatives"] += 1
             else:
                 if gold_slot != 'none':
-                    print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
+                    # print(f"Test example {i + 1}\t{slot_name=}\t{slot_pred=}\t{gold_slot=}")
                     scores[slot_name]["false_negatives"] += 1
 
+    phase_str = "Validation" if phase == 'dev' else "Test"
+    print(f"\n {phase_str} Set Results:")
+
     prec, rec, f1 = compute_micro_f1(scores=scores)
-    print(f"Micro F1 score = {f1: .3f}\nMicro Precision score = {prec: .3f}\nMicro Recall score = {rec: .3f}")
+    print(f"Micro F1 score = {f1: .3f}\nMicro Precision score = {prec: .3f}\nMicro Recall score = {rec: .3f}\n"
+          f"Accuracy = {acc / len(cleaned_preds): .3f}")
 
     return f1
 
