@@ -19,6 +19,8 @@ def set_seed(seed):
 
 def slot_metrics(labels, preds):
     f1 = seqeval_f1_score(y_true=labels, y_pred=preds, mode='strict', scheme=IOB2)
+    # Use the following instead for the ATIS dataset
+    # f1 = seqeval_f1_score(y_true=labels, y_pred=preds)
 
     return f1
 
@@ -49,9 +51,10 @@ def compute_micro_f1(scores: dict):
         fns += slot_scores["false_negatives"]
 
     print(f"# of True Positives= {tps}\t# of False Positives= {fps}\t# of False Negatives= {fns}")
-    micro_precision = tps / (tps + fps)
-    micro_recall = tps / (tps + fns)
-    micro_f1 = 2 * micro_precision * micro_recall / (micro_precision + micro_recall)
+    epsilon = 1e-10  # used to prevent division by zero
+    micro_precision = tps / (tps + fps + epsilon)
+    micro_recall = tps / (tps + fns + epsilon)
+    micro_f1 = 2 * micro_precision * micro_recall / (micro_precision + micro_recall + epsilon)
 
     return micro_precision, micro_recall, micro_f1
 
@@ -111,6 +114,163 @@ SLOT_MAPPING = {
     "year": "year"
 }
 
+# SLOT_MAPPING = {
+#     "UNK": "unknown",
+#     "album": "name of the album",
+#     "artist": "name of the artist",
+#     "best_rating": "best possible rating",
+#     "city": "name of the city",
+#     "condition_description": "weather",
+#     "condition_temperature": "temperature",
+#     "country": "name of the country",
+#     "cuisine": "type of the cuisine",
+#     "current_location": "current location",
+#     "entity_name": "name of the track",
+#     "facility": "facility",
+#     "genre": "genre of the track",
+#     "geographic_poi": "geographic point",
+#     "location_name": "name of the location",
+#     "movie_name": "name of the movie",
+#     "movie_type": "type of the movie",
+#     "music_item": "music item",
+#     "object_location_type": "type of the location",
+#     "object_name": "name of the object of concern",
+#     "object_part_of_series_type": "object is part of series type",
+#     "object_select": "object to select",
+#     "object_type": "type of the object",
+#     "party_size_description": "description of the people",
+#     "party_size_number": "size of people",
+#     "playlist": "name of the playlist",
+#     "playlist_owner": "name of the playlist owner",
+#     "poi": "point of interest",
+#     "rating_unit": "unit of the rating",
+#     "rating_value": "value of the rating",
+#     "restaurant_name": "name of the restaurant",
+#     "restaurant_type": "type of the restaurant",
+#     "served_dish": "dish that is served",
+#     "service": "type of service",
+#     "sort": "sort",
+#     "spatial_relation": "approximate area",
+#     "state": "name of the state",
+#     "timeRange": "time range",
+#     "track": "track to play",
+#     "year": "year"
+# }
+
 INVERTED_SLOT_MAPPING = {
     v: k for k, v in SLOT_MAPPING.items()
+}
+
+
+ATIS_INTENT_MAPPING = {
+    'atis_flight': 'flight',
+    'atis_airfare': 'fare',
+    'atis_ground_service': 'ground service',
+    'atis_airline': 'airline',
+    'atis_abbreviation': 'abbreviation',
+    'atis_aircraft': 'aircraft',
+    'atis_flight_time': 'flight time',
+    'atis_quantity': 'quantity',
+    'atis_flight#atis_airfare': 'flight and fare',
+    'atis_city': 'city',
+    'atis_distance': 'distance',
+    'atis_airport': 'airport',
+    'atis_ground_fare': 'ground fare',
+    'atis_capacity': 'capacity',
+    'atis_flight_no': 'flight number',
+    'atis_meal': 'meal',
+    'atis_restriction': 'restriction',
+    'atis_airline#atis_flight_no': 'airline and flight number',
+    'atis_aircraft#atis_flight#atis_flight_no': 'aircraft and flight and flight number',
+    'atis_cheapest': 'cheapest',
+    'atis_ground_service#atis_ground_fare': 'ground service and fare'
+}
+
+
+# ATIS_SLOT_MAPPING = {
+ATIS_SLOTS = {
+    'aircraft_code': '',
+    'airline_code': '',
+    'airline_name': '',
+    'airport_code': '',
+    'airport_name': '',
+    'arrive_date.date_relative': '',
+    'arrive_date.day_name': '',
+    'arrive_date.day_number': '',
+    'arrive_date.month_name': '',
+    'arrive_date.today_relative': '',
+    'arrive_time.end_time': '',
+    'arrive_time.period_mod': '',
+    'arrive_time.period_of_day': '',
+    'arrive_time.start_time': '',
+    'arrive_time.time': '',
+    'arrive_time.time_relative': '',
+    'city_name': '',
+    'class_type': '',
+    'connect': '',
+    'cost_relative': '',
+    'day_name': '',
+    'day_number': '',
+    'days_code': '',
+    'depart_date.date_relative': '',
+    'depart_date.day_name': '',
+    'depart_date.day_number': '',
+    'depart_date.month_name': '',
+    'depart_date.today_relative': '',
+    'depart_date.year': '',
+    'depart_time.end_time': '',
+    'depart_time.period_mod': '',
+    'depart_time.period_of_day': '',
+    'depart_time.start_time': '',
+    'depart_time.time': '',
+    'depart_time.time_relative': '',
+    'economy': '',
+    'fare_amount': '',
+    'fare_basis_code': '',
+    'flight_days': '',
+    'flight_mod': '',
+    'flight_number': '',
+    'flight_stop': '',
+    'flight_time': '',
+    'fromloc.airport_code': '',
+    'fromloc.airport_name': '',
+    'fromloc.city_name': '',
+    'fromloc.state_code': '',
+    'fromloc.state_name': '',
+    'meal': '',
+    'meal_code': '',
+    'meal_description': '',
+    'mod': '',
+    'month_name': '',
+    'or': '',
+    'period_of_day': '',
+    'restriction_code': '',
+    'return_date.date_relative': '',
+    'return_date.day_name': '',
+    'return_date.day_number': '',
+    'return_date.month_name': '',
+    'return_date.today_relative': '',
+    'return_time.period_mod': '',
+    'return_time.period_of_day': '',
+    'round_trip': '',
+    'state_code': '',
+    'state_name': '',
+    'stoploc.airport_name': '',
+    'stoploc.city_name': '',
+    'stoploc.state_code': '',
+    'time': '',
+    'time_relative': '',
+    'today_relative': '',
+    'toloc.airport_code': '',
+    'toloc.airport_name': '',
+    'toloc.city_name': '',
+    'toloc.country_name': '',
+    'toloc.state_code': '',
+    'toloc.state_name': '',
+    'transport_type': ''
+}
+
+ATIS_SLOT_MAPPING = {
+    key: ' '.join(re.split('_|\.', key))
+    for key in ATIS_SLOTS.keys()
 }
