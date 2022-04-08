@@ -18,9 +18,9 @@ def set_seed(seed):
 
 
 def slot_metrics(labels, preds):
-    f1 = seqeval_f1_score(y_true=labels, y_pred=preds, mode='strict', scheme=IOB2)
+    # f1 = seqeval_f1_score(y_true=labels, y_pred=preds, mode='strict', scheme=IOB2)
     # Use the following instead for the ATIS dataset
-    # f1 = seqeval_f1_score(y_true=labels, y_pred=preds)
+    f1 = seqeval_f1_score(y_true=labels, y_pred=preds)
 
     return f1
 
@@ -232,11 +232,11 @@ ATIS_SLOTS = {
     'flight_number': '',
     'flight_stop': '',
     'flight_time': '',
-    'fromloc.airport_code': '',
-    'fromloc.airport_name': '',
-    'fromloc.city_name': '',
-    'fromloc.state_code': '',
-    'fromloc.state_name': '',
+    'fromloc.airport_code': 'departure airport code',
+    'fromloc.airport_name': 'departure airport name',
+    'fromloc.city_name': 'departure city name',
+    'fromloc.state_code': 'departure state code',
+    'fromloc.state_name': 'departure state name',
     'meal': '',
     'meal_code': '',
     'meal_description': '',
@@ -255,22 +255,24 @@ ATIS_SLOTS = {
     'round_trip': '',
     'state_code': '',
     'state_name': '',
-    'stoploc.airport_name': '',
-    'stoploc.city_name': '',
-    'stoploc.state_code': '',
+    'stoploc.airport_name': 'stop airport name',
+    'stoploc.city_name': 'stop city name',
+    'stoploc.state_code': 'stop state code',
     'time': '',
     'time_relative': '',
     'today_relative': '',
-    'toloc.airport_code': '',
-    'toloc.airport_name': '',
-    'toloc.city_name': '',
-    'toloc.country_name': '',
-    'toloc.state_code': '',
-    'toloc.state_name': '',
+    'toloc.airport_code': 'arrival airport code',
+    'toloc.airport_name': 'arrival airport name',
+    'toloc.city_name': 'arrival city name',
+    'toloc.country_name': 'arrival country name',
+    'toloc.state_code': 'arrival state code',
+    'toloc.state_name': 'arrival state name',
     'transport_type': ''
 }
 
 ATIS_SLOT_MAPPING = {
     key: ' '.join(re.split('_|\.', key))
+    if ATIS_SLOTS[key] == ''
+    else ATIS_SLOTS[key]
     for key in ATIS_SLOTS.keys()
 }
