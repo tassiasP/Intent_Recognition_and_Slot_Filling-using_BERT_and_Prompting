@@ -119,8 +119,9 @@ def get_dataloader(dataset_name: str, mode: str, batch_size: int, model_name: st
     dataset = JointDataset(dataset=dataset_name, mode=mode, processor=processor)
 
     # Try out a subset of the training set (few-shot)
-    indices = torch.randperm(len(dataset))[:200]
-    dataset = Subset(dataset, indices=indices)
+    if mode == 'train':
+        indices = torch.randperm(len(dataset))[:200]
+        dataset = Subset(dataset, indices=indices)
 
     sampler = RandomSampler(data_source=dataset) if mode == 'train' else SequentialSampler(data_source=dataset)
     dataloader = DataLoader(dataset=dataset, batch_size=batch_size, sampler=sampler, num_workers=8)
