@@ -415,7 +415,6 @@ B-cost_relative O O B-fromloc.city_name O B-toloc.city_name
 O O O O B-airline_name I-airline_name O O O O O O O B-fare_basis_code
 O O B-flight_stop O O B-fromloc.city_name O B-toloc.city_name O O B-toloc.city_name B-arrive_time.time_relative B-arrive_time.time I-arrive_time.time
 B-fromloc.city_name O B-toloc.city_name O O B-depart_date.month_name B-depart_date.day_number
-O O O O O B-flight_time O O O B-fromloc.city_name I-fromloc.city_name O B-toloc.city_name
 O O O O B-fromloc.city_name O B-toloc.city_name
 O O O O O O B-city_name
 O O O O O O O B-fromloc.airport_name I-fromloc.airport_name I-fromloc.airport_name I-fromloc.airport_name O B-fromloc.city_name

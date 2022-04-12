@@ -415,7 +415,6 @@ atis_airfare
 atis_quantity
 atis_flight
 atis_flight
-atis_airfare#atis_flight_time
 atis_airline
 atis_ground_service
 atis_distance
