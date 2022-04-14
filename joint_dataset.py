@@ -6,8 +6,9 @@ from typing import List
 
 import torch
 from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
-from torch.utils.data.dataset import Subset
+from torch.utils.data.dataset import Subset, T_co
 import torch.nn as nn
+from torch.nn.functional import one_hot
 from transformers import BertTokenizerFast, BatchEncoding, T5Tokenizer
 
 from reader import Reader
@@ -321,3 +322,47 @@ class SlotDataset(IntentDataset):
     #         return 500
     #     else:
     #         return len(self.intents)
+
+
+class BinaryDataset(JointDataset):
+
+    def __init__(self, dataset: str, mode: str):
+        self.processor = JointProcessor(model_name="bert-base-uncased")
+        super().__init__(dataset, mode, self.processor)
+
+        self.slot_labels = self.remove_bio(self.slot_labels)
+
+    @staticmethod
+    def remove_bio(slot_labels):
+        cleaned_labels = {label[2:] for label in slot_labels if label != 'O' and label not in ["UNK", "PAD"]}
+        cleaned_labels.add("UNK")
+        return sorted(list(cleaned_labels))
+
+    def get_slots_ids(self, example: InputExample):
+        slot_ids = set()
+        for slot in example.slot_labels:
+            if slot != 'O':
+                slot = slot[2:]
+                if slot in self.slot_labels:
+                    slot_ids.add(self.slot_labels.index(slot))
+                else:
+                    slot_ids.add(self.slot_labels.index("UNK"))
+
+        return list(slot_ids)
+
+    def __getitem__(self, index) -> T_co:
+        example = InputExample(index, self.sentences[index], self.slots[index], self.intents[index])
+        model_inputs: BatchEncoding = self.processor.tokenizer(
+            example.utterance,
+            padding="max_length",
+            max_length=self.processor.max_len,
+            truncation=True,
+            is_split_into_words=True
+        )
+        # one hot encode the labels
+        slot_ids = self.get_slots_ids(example)
+        slot_ids = one_hot(torch.tensor(slot_ids), len(self.slot_labels))
+        slot_ids = slot_ids.sum(dim=0).float()
+        model_inputs["labels"] = torch.unsqueeze(slot_ids, dim=0)
+
+        return model_inputs
