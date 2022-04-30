@@ -350,7 +350,7 @@ class BinaryDataset(JointDataset):
 
         return list(slot_ids)
 
-    def __getitem__(self, index) -> T_co:
+    def __getitem__(self, index):
         example = InputExample(index, self.sentences[index], self.slots[index], self.intents[index])
         model_inputs: BatchEncoding = self.processor.tokenizer(
             example.utterance,
@@ -361,8 +361,31 @@ class BinaryDataset(JointDataset):
         )
         # one hot encode the labels
         slot_ids = self.get_slots_ids(example)
-        slot_ids = one_hot(torch.tensor(slot_ids), len(self.slot_labels))
-        slot_ids = slot_ids.sum(dim=0).float()
-        model_inputs["labels"] = torch.unsqueeze(slot_ids, dim=0)
+        slot_ids = one_hot(torch.tensor(slot_ids, dtype=torch.int64), len(self.slot_labels))
+        labels = slot_ids.sum(dim=0).float()
+        # model_inputs["labels"] = torch.unsqueeze(slot_ids, dim=0)
 
-        return model_inputs
+        input_ids = torch.tensor(model_inputs["input_ids"], dtype=torch.long)
+        token_type_ids = torch.tensor(model_inputs["token_type_ids"], dtype=torch.long)
+        attention_mask = torch.tensor(model_inputs["attention_mask"], dtype=torch.long)
+
+        # labels = slot_ids.clone().detach()
+        # labels = torch.tensor(slot_ids, dtype=torch.float)
+        # slot_labels = torch.tensor(slot_labels, dtype=torch.long)
+        # intent_label = torch.tensor(intent_id, dtype=torch.long)
+
+        return input_ids, token_type_ids, attention_mask, labels
+
+
+def get_binary_dataloader(dataset_name: str, mode: str, batch_size: int) -> DataLoader:
+    dataset = BinaryDataset(dataset=dataset_name, mode=mode)
+
+    # Try out a subset of the training set (few-shot)
+    if mode == 'train':
+        indices = torch.randperm(len(dataset))[:500]
+        dataset = Subset(dataset, indices=indices)
+
+    sampler = RandomSampler(data_source=dataset) if mode == 'train' else SequentialSampler(data_source=dataset)
+    dataloader = DataLoader(dataset=dataset, batch_size=batch_size, sampler=sampler, num_workers=8)
+
+    return dataloader

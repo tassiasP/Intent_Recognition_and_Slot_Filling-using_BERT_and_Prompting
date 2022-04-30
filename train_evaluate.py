@@ -1,4 +1,5 @@
 import numpy as np
+from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -7,6 +8,118 @@ from transformers import AdamW, get_linear_schedule_with_warmup, T5ForConditiona
 
 from utils import intent_metrics, slot_metrics, convert_t5_output_to_slot_preds, compute_micro_f1, SLOT_MAPPING, \
     ATIS_SLOT_MAPPING
+
+
+def train_binary(
+        model,
+        train_dataloader: DataLoader,
+        val_dataloader: DataLoader,
+        test_dataloader: DataLoader,
+        training_params,
+        labels_vocab,
+        pos_weight: list = None
+):
+    n_epochs = training_params.epochs
+    learning_rate = training_params.learning_rate
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+
+    num_training_steps = n_epochs * len(train_dataloader)
+
+    # TODO pos_weight
+    # criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([30] * len(labels_vocab)).to(device))
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight).to(device))
+    # criterion = nn.BCEWithLogitsLoss()
+
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
+
+    progress_bar = trange(num_training_steps, desc="Total Batches")
+
+    best_val_loss = float("inf")
+    model.train()
+    for epoch in range(n_epochs):
+        running_loss = 0.0
+        for i, batch in enumerate(train_dataloader):
+            optimizer.zero_grad()
+
+            batch = tuple(feature.to(device) for feature in batch)
+            input_ids, token_type_ids, attention_mask, labels = batch
+
+            logits, probabilities = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids
+            )
+
+            loss = criterion(logits, labels)
+            loss.backward()  # accelerator.backward()
+            running_loss += loss.item()
+
+            optimizer.step()
+            scheduler.step()
+
+            if (i % int(len(train_dataloader) / 4) == 0 or i == len(train_dataloader) - 1) and i != 0:
+                print(f" Epoch: {epoch + 1} / {n_epochs}, Training Batch: {i + 1} / {len(train_dataloader)},"
+                      f" Loss: {running_loss / i: .3f}")
+
+            progress_bar.update(1)
+
+        val_loss = evaluate_binary(model, val_dataloader, labels_vocab, phase='dev')
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            # TODO save best model
+
+    if test_dataloader is not None:
+        return evaluate_binary(model, test_dataloader, labels_vocab, phase='test')
+
+
+def evaluate_binary(model, dataloader: DataLoader, labels_vocab, phase='dev'):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    model.eval()
+    running_loss = 0.0
+    criterion = nn.BCEWithLogitsLoss()
+
+    preds = []
+    labels = []
+
+    for batch in dataloader:
+        with torch.no_grad():
+            batch = tuple(feature.to(device) for feature in batch)
+            input_ids, token_type_ids, attention_mask, batch_labels = batch
+
+            logits, probabilities = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids
+            )
+            loss = criterion(logits, batch_labels)
+            running_loss += loss.item()
+
+        # batch_preds = torch.round(probabilities).int()
+        # preds.extend(batch_preds.detach().cpu().numpy())
+        threshold = 0.5
+        batch_preds = torch.where(probabilities > threshold, 1, 0)
+        preds.extend(batch_preds.detach().cpu().tolist())
+
+        labels.extend(batch_labels.int().detach().cpu().tolist())
+
+    # preds = np.array(preds).tolist()
+
+    val_loss = running_loss / len(dataloader)
+    phase_str = "Validation" if phase == 'dev' else "Test"
+    print(f" {phase_str} Loss: {val_loss :.3f}")
+    print(f" {phase_str} Accuracy: {accuracy_score(labels, preds) :.3f}")
+    # print(f" {phase_str} Weighted F1-score: {f1_score(labels, preds, average='weighted') :.3f}")
+    # print(f" {phase_str} Weighted Precision score: {precision_score(labels, preds, average='weighted') :.3f}")
+    # print(f" {phase_str} Weighted Recall score: {recall_score(labels, preds, average='weighted') :.3f}")
+
+    print(f" {phase_str} F1-scores: {f1_score(labels, preds, average=None)}")
+    print(f" {phase_str} Precision scores: {precision_score(labels, preds, average=None)}")
+    print(f" {phase_str} Recall scores: {recall_score(labels, preds, average=None)}")
+    return val_loss
 
 
 def train(
@@ -329,5 +442,3 @@ def evaluate_seq2seq_model(model, tokenizer, dataloader, phase='dev'):
           f"Accuracy = {acc / len(cleaned_preds): .3f}")
 
     return f1
-
-

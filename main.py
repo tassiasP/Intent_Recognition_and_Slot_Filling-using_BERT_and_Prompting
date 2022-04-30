@@ -1,4 +1,5 @@
 import argparse
+from collections import Counter
 
 from omegaconf import OmegaConf
 import torch.cuda
@@ -7,14 +8,17 @@ from torch.utils.data.dataset import Subset
 from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer, T5Config, T5Tokenizer, T5ForConditionalGeneration
 from transformers import logging
 
-from joint_dataset import get_dataloader, IntentDataset, SlotDataset
-from models import JointBert, T5PromptTuningLM
-from train_evaluate import train, train_seq2seq_model
+from joint_dataset import get_dataloader, IntentDataset, SlotDataset, BinaryDataset, get_binary_dataloader
+from models import JointBert, T5PromptTuningLM, BinarySlotClassifier
+from train_evaluate import train, train_seq2seq_model, train_binary
 from utils import set_seed, INTENT_MAPPING, ATIS_INTENT_MAPPING
 from reader import Reader
 
 
 def main(run_args, model_config):
+    import warnings
+    warnings.filterwarnings('once')
+
     torch.cuda.empty_cache()
     set_seed(run_args.seed)
 
@@ -54,6 +58,27 @@ def main(run_args, model_config):
                 else:
                     train(model, train_dataloader, val_dataloader, test_dataloader, model_config, intent_labels,
                           slot_labels)
+    elif run_args.approach == 'binary':
+        labels = BinaryDataset.remove_bio(slot_labels)
+        model = BinarySlotClassifier(model_config, len(labels))
+        train_dataloader = get_binary_dataloader(run_args.dataset, mode='train', batch_size=model_config.batch_size)
+
+        # assign the corresponding weight to each positive value of each slot label - needed for BCE loss
+        dict_lst = []
+        for utter, tags in zip(train_dataloader.dataset.dataset.sentences, train_dataloader.dataset.dataset.slots):
+        # for utter, tags in zip(train_dataloader.dataset.sentences, train_dataloader.dataset.slots):
+            slot_dict = SlotDataset.get_clean_slots_dict(utter, tags)
+            dict_lst.extend(list(slot_dict.keys()))
+        slots_counter = Counter(dict_lst)
+        pos_weight = [1]  # 1 for the UNK class
+        for slot_name in train_dataloader.dataset.dataset.slot_labels[1:]:
+            pos_weight.append(len(train_dataloader.dataset.dataset) / slots_counter[slot_name])
+        # for slot_name in train_dataloader.dataset.slot_labels[1:]:
+        #     pos_weight.append(len(train_dataloader.dataset) / slots_counter[slot_name])
+
+        val_dataloader = get_binary_dataloader(run_args.dataset, mode='dev', batch_size=model_config.batch_size)
+        test_dataloader = get_binary_dataloader(run_args.dataset, mode='test', batch_size=model_config.batch_size)
+        train_binary(model, train_dataloader, val_dataloader, test_dataloader, model_config, labels, pos_weight)
 
     elif run_args.approach == 'prompting':
         if run_args.predict_intent:
@@ -83,7 +108,7 @@ def main(run_args, model_config):
                 dataloader_num_workers=4,
                 per_device_train_batch_size=32,
                 per_device_eval_batch_size=32,
-                num_train_epochs=18,
+                num_train_epochs=20,
                 logging_steps=50,
                 learning_rate=1e-3,
                 load_best_model_at_end=True,
@@ -186,19 +211,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--dataset", default="atis", type=str, help="The input dataset")
-    parser.add_argument("--approach", default="prompting", type=str,
+    parser.add_argument("--approach", default="binary", type=str,
                         help="Select approach between `prompting` and `fine-tuning`")
     parser.add_argument("--predict_intent", default=False, type=bool, help="Select whether to predict the intent")
     parser.add_argument("--predict_slots", default=True, type=bool, help="Select whether to predict the slots")
 
     # parser.add_argument("--model_dir", default=None, required=True, type=str, help="Path to save, load model")
-    parser.add_argument("--model_type", default="t5", type=str, help="Select model type")
-    parser.add_argument("--seed", type=int, default=42, help="Seed for reproducibility")
+    parser.add_argument("--model_type", default="bert", type=str, help="Select model type")
+    parser.add_argument("--seed", type=int, default=43, help="Seed for reproducibility")
 
     parser.add_argument("--do_train", default=True, type=bool, help="Whether to train the model.")
     parser.add_argument("--do_eval", default=True, type=bool, help="Whether to evaluate the model on the test set.")
 
-    parser.add_argument("--save_preds", default=True, type=bool, help="Whether to save model's predictions to csv.")
+    parser.add_argument("--save_preds", default=False, type=bool, help="Whether to save model's predictions to csv.")
 
     run_args = parser.parse_args()
     model_config = OmegaConf.load("config/model_config.yaml")
